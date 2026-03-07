@@ -1,0 +1,76 @@
+# e2e/multi-node/docker-compose.yml
+# Topología multi-nodo para tests E2E de consistencia del EPIC 008.
+# Uso: docker compose -f e2e/multi-node/docker-compose.yml up -d --wait
+#
+# Servicios:
+#   db     — PostgreSQL 15 (Global DB)
+#   node_a — instancia hellojohn (puerto externo 8080)
+#   node_b — instancia hellojohn (puerto externo 8081)
+#
+# Ambos nodos comparten el mismo volumen FS para las claves de firma JWT.
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: cp_admin
+      POSTGRES_PASSWORD: secret_password
+      POSTGRES_DB: hellojohn_cp
+    ports:
+      - "5433:5432" # Puerto diferente al default para no colisionar con postgres local
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U cp_admin -d hellojohn_cp" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  node_a:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    environment:
+      GLOBAL_DB_DSN: "postgres://cp_admin:secret_password@db:5432/hellojohn_cp?sslmode=disable"
+      GLOBAL_DB_DRIVER: "pg"
+      FS_ROOT: "/data/hellojohn"
+      BASE_URL: "http://localhost:8080"
+      V2_SERVER_ADDR: ":8080"
+      # ADVERTENCIA: Keys de test únicamente — NO usar en producción
+      SIGNING_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      SECRETBOX_MASTER_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      APP_ENV: "test"
+    volumes:
+      - hellojohn_data:/data/hellojohn
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  node_b:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    environment:
+      GLOBAL_DB_DSN: "postgres://cp_admin:secret_password@db:5432/hellojohn_cp?sslmode=disable"
+      GLOBAL_DB_DRIVER: "pg"
+      FS_ROOT: "/data/hellojohn"
+      BASE_URL: "http://localhost:8081"
+      V2_SERVER_ADDR: ":8080"
+      # ADVERTENCIA: Keys de test únicamente — NO usar en producción
+      SIGNING_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      SECRETBOX_MASTER_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      APP_ENV: "test"
+    volumes:
+      - hellojohn_data:/data/hellojohn
+    ports:
+      - "8081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  hellojohn_data:

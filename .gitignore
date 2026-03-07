@@ -1,0 +1,105 @@
+# ───────── Environment files ─────────
+.env
+.env.*
+!.env.example
+configs/config.yaml
+
+# ───────── Control-plane local data ─────────
+/data/
+/data/hellojohn/*
+
+# ───────── Local utility scripts (keep out of repo) ─────────
+codeprinter.bat
+dump_code.ps1
+print_list.bat
+project_tree.ps1
+dump_code_*.txt
+code_dump_*.txt
+project_tree_*.txt
+seed_data.*
+test_*.ps1
+test-*.ps1
+
+
+# ───────── OS / Tooling ─────────
+*.log
+*.swp
+*.DS_Store
+Thumbs.db
+
+# ───────── Build / Cache ─────────
+bin/
+dist/
+coverage/
+*.exe
+migrate.exe
+hellojohn-service*.exe
+
+security_password_blacklist.txt
+contar_estructura.ps1
+
+
+# ───────── UI ─────────
+/ui/.next/
+/ui/out/
+/ui/node_modules/
+/ui/.env.local
+/ui/.env.development.local
+/ui/.env.test.local
+/ui/.env.production.local
+/ui/build.log
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Context docs
+roadmap.md
+roadmap_v2.md
+
+# ───────── SDKs ─────────
+/sdks/
+/sdks/js/node_modules
+/sdks/js/.next
+/sdks/js/.env.local
+/sdks/js/.env.development.local
+/sdks/js/.env.test.local
+/sdks/js/.env.production.local
+/sdks/node/node_modules
+/sdks/node/.next
+/sdks/react/node_modules
+/sdks/react/.next
+
+
+#/images
+/bananacorp
+
+/bananacorp/node_modules
+/bananacorp/.next/
+/deployments/docker-compose-storage.yaml
+/deployments/run-3nodes.ps1
+
+
+# -------- scripts --------
+
+/scripts/
+
+
+# --------- claude ---------
+/.claude/
+.gemini
+/.vscode/
+/images
+
+
+# ───────── Auditoría ─────────
+docs/
+docs/audit_older
+docs/ui-unification
+docs/controlplane
+nul
+/deployments/
+sdk_refactor.md
+
+
+/landing
+/EPIC_TRANSICION_SLUG_ID
+CLOUD_CAPABILITIES.md
