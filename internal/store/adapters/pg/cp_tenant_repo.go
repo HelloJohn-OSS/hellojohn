@@ -74,7 +74,7 @@ func (r *cpTenantRepo) Create(ctx context.Context, tenant *repository.Tenant) er
 		ON CONFLICT (slug) DO UPDATE
 		  SET name=$3, language=$4, settings=$5, updated_at=now()`
 	_, err = r.pool.Exec(ctx, q,
-		tenant.ID, tenant.Slug, tenant.Name, tenant.Language, settingsJSON)
+		tenant.ID, tenant.Slug, tenant.Name, tenant.Language, string(settingsJSON))
 	if err != nil {
 		return fmt.Errorf("cp_tenant_repo: create: %w", err)
 	}
@@ -90,7 +90,7 @@ func (r *cpTenantRepo) Update(ctx context.Context, tenant *repository.Tenant) er
 		UPDATE cp_tenant
 		SET name=$1, language=$2, settings=$3, updated_at=now()
 		WHERE slug=$4`
-	tag, err := r.pool.Exec(ctx, q, tenant.Name, tenant.Language, settingsJSON, tenant.Slug)
+	tag, err := r.pool.Exec(ctx, q, tenant.Name, tenant.Language, string(settingsJSON), tenant.Slug)
 	if err != nil {
 		return fmt.Errorf("cp_tenant_repo: update: %w", err)
 	}
@@ -118,7 +118,7 @@ func (r *cpTenantRepo) UpdateSettings(ctx context.Context, slug string, settings
 		return fmt.Errorf("cp_tenant_repo: marshal settings: %w", err)
 	}
 	const q = `UPDATE cp_tenant SET settings=$1, updated_at=now() WHERE slug=$2`
-	tag, err := r.pool.Exec(ctx, q, settingsJSON, slug)
+	tag, err := r.pool.Exec(ctx, q, string(settingsJSON), slug)
 	if err != nil {
 		return fmt.Errorf("cp_tenant_repo: update settings: %w", err)
 	}

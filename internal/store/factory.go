@@ -222,33 +222,26 @@ func NewFactory(ctx context.Context, cfg FactoryConfig) (*Factory, error) {
 func (f *Factory) runGlobalMigrations(ctx context.Context, cfg FactoryConfig) error {
 	globalMigrator := NewMigrator(cfg.GlobalMigrationsFS, cfg.GlobalMigrationsDir)
 
-	// Intentar usar pgxpool si el adapter lo soporta (DB PG con pgx/v5)
-	type pgxPoolProvider interface {
-		PgxPool() PgxPoolExecutor
-	}
-	if pp, ok := f.globalDBConn.(pgxPoolProvider); ok {
-		_, err := globalMigrator.RunWithPgxPool(ctx, pp.PgxPool())
-		return err
-	}
-
-	// Fallback: usar SQLExecutor genérico si el adapter lo expone
-	type sqlExecProvider interface {
-		SQLExecutor() SQLExecutor
-	}
-	if sp, ok := f.globalDBConn.(sqlExecProvider); ok {
-		driver := "postgres"
-		if cfg.GlobalDB != nil {
-			driver = cfg.GlobalDB.Driver
+	// Usar MigratableConnection — la misma interfaz que usan las migraciones
+	// de tenant y GDP. El pg adapter la implementa via GetMigrationExecutor().
+	migratable, ok := f.globalDBConn.(MigratableConnection)
+	if !ok {
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("store: global DB adapter does not implement MigratableConnection — skipping auto-migration")
 		}
-		_, err := globalMigrator.Run(ctx, sp.SQLExecutor(), driver)
-		return err
+		return nil
 	}
 
-	// Si el adapter no expone ninguna interfaz de ejecución, loguear y seguir
-	if cfg.Logger != nil {
-		cfg.Logger.Printf("store: global DB adapter does not expose PgxPool or SQLExecutor — skipping auto-migration")
+	executor := migratable.GetMigrationExecutor()
+	if executor == nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("store: global DB GetMigrationExecutor returned nil — skipping auto-migration")
+		}
+		return nil
 	}
-	return nil
+
+	_, err := globalMigrator.RunWithPgxPool(ctx, executor)
+	return err
 }
 
 // Mode retorna el modo operacional detectado/configurado.

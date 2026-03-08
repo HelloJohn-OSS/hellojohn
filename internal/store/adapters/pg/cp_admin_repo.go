@@ -3,7 +3,6 @@ package pg
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -22,7 +21,7 @@ type cpAdminRepo struct {
 
 func (r *cpAdminRepo) List(ctx context.Context, filter repository.AdminFilter) ([]repository.Admin, error) {
 	q := `
-		SELECT id, email, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
 		       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		       COALESCE(onboarding_completed, false),
 		       created_at, updated_at
@@ -71,7 +70,7 @@ func (r *cpAdminRepo) List(ctx context.Context, filter repository.AdminFilter) (
 
 func (r *cpAdminRepo) GetByID(ctx context.Context, id string) (*repository.Admin, error) {
 	const q = `
-		SELECT id, email, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
 		       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		       COALESCE(onboarding_completed, false),
 		       created_at, updated_at
@@ -89,7 +88,7 @@ func (r *cpAdminRepo) GetByID(ctx context.Context, id string) (*repository.Admin
 
 func (r *cpAdminRepo) GetByEmail(ctx context.Context, email string) (*repository.Admin, error) {
 	const q = `
-		SELECT id, email, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
 		       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		       COALESCE(onboarding_completed, false),
 		       created_at, updated_at
@@ -119,7 +118,7 @@ func (r *cpAdminRepo) Create(ctx context.Context, input repository.CreateAdminIn
 			(email, password_hash, name, role, tenant_ids, email_verified, social_provider, plan, enabled, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now(), now())
 		ON CONFLICT (email) DO NOTHING
-		RETURNING id, email, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		RETURNING id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
 		          email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		          COALESCE(onboarding_completed, false),
 		          created_at, updated_at`
@@ -185,7 +184,7 @@ func (r *cpAdminRepo) Update(ctx context.Context, id string, input repository.Up
 	setClauses = append(setClauses, "updated_at=now()")
 	q := fmt.Sprintf(`
 		UPDATE cp_admin SET %s WHERE id=$1
-		RETURNING id, email, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		RETURNING id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
 		          email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		          COALESCE(onboarding_completed, false),
 		          created_at, updated_at`,
@@ -278,7 +277,7 @@ func (r *cpAdminRepo) SetInviteToken(ctx context.Context, id, tokenHash string, 
 
 // GetByInviteTokenHash implementa AdminRepository.GetByInviteTokenHash
 func (r *cpAdminRepo) GetByInviteTokenHash(ctx context.Context, tokenHash string) (*repository.Admin, error) {
-	const q = `SELECT id, email, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+	const q = `SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
 	       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 	       COALESCE(onboarding_completed, false),
 	       created_at, updated_at FROM cp_admin WHERE invite_token_hash=$1 AND status='pending'`
@@ -314,14 +313,14 @@ func (r *cpAdminRepo) scanRow(row interface {
 }) (*repository.Admin, error) {
 	var a repository.Admin
 	var role string
-	var tenantIDsJSON []byte
+	var tenantIDs []string
 	var enabled bool
 	var lastSeenAt *time.Time
 	var disabledAt *time.Time
 
 	err := row.Scan(
-		&a.ID, &a.Email, &a.Name, &role,
-		&tenantIDsJSON, &enabled, &lastSeenAt, &disabledAt,
+		&a.ID, &a.Email, &a.PasswordHash, &a.Name, &role,
+		&tenantIDs, &enabled, &lastSeenAt, &disabledAt,
 		&a.EmailVerified, &a.SocialProvider, &a.Plan,
 		&a.OnboardingCompleted,
 		&a.CreatedAt, &a.UpdatedAt,
@@ -333,17 +332,11 @@ func (r *cpAdminRepo) scanRow(row interface {
 	a.LastSeenAt = lastSeenAt
 	a.DisabledAt = disabledAt
 
-	// tenant_ids es TEXT[] en PG — pgx lo escanea como []byte en algunos contextos
-	// Intentar como []string directo (pgx convierte TEXT[] automáticamente)
-	// Si la columna llega como []byte por algún driver quirk, deserializar:
-	if len(tenantIDsJSON) > 0 && tenantIDsJSON[0] == '[' {
-		var slugs []string
-		_ = json.Unmarshal(tenantIDsJSON, &slugs)
-		a.AssignedTenants = slugs
-		a.TenantAccess = make([]repository.TenantAccessEntry, len(slugs))
-		for i, s := range slugs {
-			a.TenantAccess[i] = repository.TenantAccessEntry{TenantSlug: s, Role: "owner"}
-		}
+	// tenant_ids es TEXT[] en PG; mapear directamente a []string.
+	a.AssignedTenants = tenantIDs
+	a.TenantAccess = make([]repository.TenantAccessEntry, len(tenantIDs))
+	for i, s := range tenantIDs {
+		a.TenantAccess[i] = repository.TenantAccessEntry{TenantSlug: s, Role: "owner"}
 	}
 	return &a, nil
 }
