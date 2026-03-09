@@ -101,7 +101,7 @@ func (m OperationalMode) SupportsGlobalDP() bool {
 
 // SupportsGlobalDB indica si hay DB global disponible.
 func (m OperationalMode) SupportsGlobalDB() bool {
-	return m == ModeFSGlobalDB || m == ModeFullDB
+	return m == ModeFSGlobalDB || m == ModeFullDB || m == ModeFullGlobalDP
 }
 
 // SupportsTenantDB indica si soporta DB por tenant.

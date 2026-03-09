@@ -22,6 +22,7 @@ import (
 type Migrator struct {
 	migrationsFS  embed.FS
 	migrationsDir string
+	migrationsTbl string
 }
 
 // NewMigrator crea un nuevo Migrator.
@@ -29,6 +30,7 @@ func NewMigrator(migrationsFS embed.FS, migrationsDir string) *Migrator {
 	return &Migrator{
 		migrationsFS:  migrationsFS,
 		migrationsDir: migrationsDir,
+		migrationsTbl: migrationTableName(migrationsDir),
 	}
 }
 
@@ -51,6 +53,25 @@ type MigrationResult struct {
 // migrationFilePattern patrón para nombres de archivo de migración.
 // Solo capturamos archivos _up.sql (ignoramos _down.sql)
 var migrationFilePattern = regexp.MustCompile(`^(\d+)_(.+)_up\.sql$`)
+var migrationTableSafePattern = regexp.MustCompile(`[^a-z0-9_]+`)
+
+// migrationTableName derives a stable migration tracking table per migration scope.
+// This prevents collisions when different migration sets (global/gdp/tenant) share
+// the same physical database.
+func migrationTableName(dir string) string {
+	normalized := strings.TrimSpace(strings.ToLower(dir))
+	if normalized == "" {
+		return "_migrations"
+	}
+	normalized = strings.ReplaceAll(normalized, "/", "_")
+	normalized = strings.ReplaceAll(normalized, "\\", "_")
+	normalized = migrationTableSafePattern.ReplaceAllString(normalized, "_")
+	normalized = strings.Trim(normalized, "_")
+	if normalized == "" {
+		return "_migrations"
+	}
+	return "_migrations_" + normalized
+}
 
 // ParseMigrations lee y parsea las migraciones del FS embebido.
 func (m *Migrator) ParseMigrations() ([]Migration, error) {
@@ -157,7 +178,7 @@ func (m *Migrator) Run(ctx context.Context, exec SQLExecutor, driver string) (*M
 // HasPending verifica si hay migraciones pendientes.
 func (m *Migrator) HasPending(ctx context.Context, exec SQLExecutor, driver string) (bool, error) {
 	// Verificar si existe la tabla de migraciones
-	exists, err := m.tableExists(ctx, exec, driver, "_migrations")
+	exists, err := m.tableExists(ctx, exec, driver, m.migrationsTbl)
 	if err != nil {
 		return false, err
 	}
@@ -189,26 +210,26 @@ func (m *Migrator) ensureMigrationsTable(ctx context.Context, exec SQLExecutor, 
 	var createSQL string
 	switch driver {
 	case "postgres":
-		createSQL = `
-			CREATE TABLE IF NOT EXISTS _migrations (
+		createSQL = fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
 				version INT PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
 				applied_at TIMESTAMPTZ DEFAULT NOW()
-			)`
+			)`, m.migrationsTbl)
 	case "mysql":
-		createSQL = `
-			CREATE TABLE IF NOT EXISTS _migrations (
+		createSQL = fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
 				version INT PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
 				applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
-			)`
+			)`, m.migrationsTbl)
 	default:
-		createSQL = `
-			CREATE TABLE IF NOT EXISTS _migrations (
+		createSQL = fmt.Sprintf(`
+			CREATE TABLE IF NOT EXISTS %s (
 				version INT PRIMARY KEY,
 				name TEXT NOT NULL,
 				applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			)`
+			)`, m.migrationsTbl)
 	}
 
 	_, err := exec.ExecContext(ctx, createSQL)
@@ -223,7 +244,7 @@ func (m *Migrator) getAppliedVersions(ctx context.Context, exec SQLExecutor) (ma
 
 	// Obtener máxima versión aplicada como heurística rápida
 	var maxVersion int
-	row := exec.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM _migrations")
+	row := exec.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM "+m.migrationsTbl)
 	if err := row.Scan(&maxVersion); err != nil {
 		if strings.Contains(err.Error(), "no rows") {
 			return applied, nil
@@ -250,7 +271,7 @@ func (m *Migrator) applyMigration(ctx context.Context, exec SQLExecutor, mig Mig
 
 	// Registrar en tabla de migraciones
 	_, err = exec.ExecContext(ctx,
-		"INSERT INTO _migrations (version, name) VALUES ($1, $2)",
+		"INSERT INTO "+m.migrationsTbl+" (version, name) VALUES ($1, $2)",
 		mig.Version, mig.Name,
 	)
 	return err
