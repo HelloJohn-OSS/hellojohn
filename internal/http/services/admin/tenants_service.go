@@ -16,6 +16,7 @@ import (
 	emailv2 "github.com/dropDatabas3/hellojohn/internal/email"
 	dto "github.com/dropDatabas3/hellojohn/internal/http/dto/admin"
 	httperrors "github.com/dropDatabas3/hellojohn/internal/http/errors"
+	mw "github.com/dropDatabas3/hellojohn/internal/http/middlewares"
 	"github.com/dropDatabas3/hellojohn/internal/jwt"
 	"github.com/dropDatabas3/hellojohn/internal/observability/logger"
 	"github.com/dropDatabas3/hellojohn/internal/passwordpolicy"
@@ -99,12 +100,57 @@ func (s *tenantsService) List(ctx context.Context) ([]dto.TenantResponse, error)
 		return nil, err
 	}
 
+	tenants = filterTenantsByAdminClaims(tenants, mw.GetAdminClaims(ctx))
+
 	res := make([]dto.TenantResponse, len(tenants))
 	for i, t := range tenants {
 		res[i] = mapTenantToResponse(t)
 	}
 
 	return res, nil
+}
+
+func filterTenantsByAdminClaims(tenants []repository.Tenant, adminClaims *jwt.AdminAccessClaims) []repository.Tenant {
+	if len(tenants) == 0 {
+		return tenants
+	}
+
+	// Fail closed when auth context is absent.
+	if adminClaims == nil {
+		return []repository.Tenant{}
+	}
+
+	if strings.EqualFold(strings.TrimSpace(adminClaims.AdminType), "global") {
+		return tenants
+	}
+
+	if len(adminClaims.Tenants) == 0 {
+		return []repository.Tenant{}
+	}
+
+	allowedRefs := make(map[string]struct{}, len(adminClaims.Tenants))
+	for _, entry := range adminClaims.Tenants {
+		if ref := normalizeTenantAccessRef(entry.Slug); ref != "" {
+			allowedRefs[ref] = struct{}{}
+		}
+	}
+
+	filtered := make([]repository.Tenant, 0, len(tenants))
+	for _, tenant := range tenants {
+		if _, ok := allowedRefs[normalizeTenantAccessRef(tenant.Slug)]; ok {
+			filtered = append(filtered, tenant)
+			continue
+		}
+		if _, ok := allowedRefs[normalizeTenantAccessRef(tenant.ID)]; ok {
+			filtered = append(filtered, tenant)
+		}
+	}
+
+	return filtered
+}
+
+func normalizeTenantAccessRef(ref string) string {
+	return strings.ToLower(strings.TrimSpace(ref))
 }
 
 func (s *tenantsService) Create(ctx context.Context, req dto.CreateTenantRequest) (*dto.TenantResponse, error) {

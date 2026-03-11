@@ -135,7 +135,9 @@ type Deps struct {
 	// ─── Bot Protection ───
 	// BotProtection valida tokens anti-bot en login, registro y password reset.
 	// Si nil (o NoopService), no se realiza validación bot.
-	BotProtection botpkg.BotProtectionService
+	BotProtection              botpkg.BotProtectionService
+	PasswordPolicyGlobalTenant string
+	PasswordPolicyEnv          *repository.SecurityPolicy
 }
 
 // App represents the wired V2 application.
@@ -217,6 +219,9 @@ func New(cfg Config, deps Deps) (*App, error) {
 		EtlJobRepo: deps.EtlJobRepo,
 		// Bot Protection
 		BotProtection: deps.BotProtection,
+		// Password Policy fallback chain
+		PasswordPolicyGlobalTenant: deps.PasswordPolicyGlobalTenant,
+		PasswordPolicyEnv:          deps.PasswordPolicyEnv,
 	})
 
 	// 2. Build Controllers

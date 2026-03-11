@@ -55,6 +55,10 @@ type RegisterDeps struct {
 	// BotProtection valida tokens anti-bot antes de crear el usuario.
 	// Si nil, se omite la validación (equivalente a NoopService).
 	BotProtection bot.BotProtectionService
+
+	// Password Policy fallback chain configuration.
+	PasswordPolicyGlobalTenant string
+	PasswordPolicyEnv          *repository.SecurityPolicy
 }
 
 type registerService struct {
@@ -72,15 +76,16 @@ func NewRegisterService(deps RegisterDeps) RegisterService {
 // Register errors
 // Register errors (sentinel)
 var (
-	ErrRegisterMissingFields       = errors.New("missing required fields")
-	ErrRegisterInvalidClient       = errors.New("invalid client")
-	ErrRegisterPasswordNotAllowed  = errors.New("password registration not allowed for this client")
-	ErrRegisterEmailTaken          = errors.New("email already registered")
-	ErrRegisterPolicyViolation     = errors.New("password policy violation")
-	ErrRegisterHashFailed          = errors.New("failed to hash password")
-	ErrRegisterCreateFailed        = errors.New("failed to create user")
-	ErrRegisterTokenFailed         = errors.New("failed to issue tokens")
-	ErrRegisterFSAdminNotAvailable = errors.New("fs-admin registration not available in v2")
+	ErrRegisterMissingFields           = errors.New("missing required fields")
+	ErrRegisterInvalidClient           = errors.New("invalid client")
+	ErrRegisterPasswordNotAllowed      = errors.New("password registration not allowed for this client")
+	ErrRegisterEmailTaken              = errors.New("email already registered")
+	ErrRegisterPolicyViolation         = errors.New("password policy violation")
+	ErrRegisterHashFailed              = errors.New("failed to hash password")
+	ErrRegisterCreateFailed            = errors.New("failed to create user")
+	ErrRegisterTokenFailed             = errors.New("failed to issue tokens")
+	ErrRegisterVerificationUnavailable = errors.New("email verification delivery unavailable")
+	ErrRegisterFSAdminNotAvailable     = errors.New("fs-admin registration not available in v2")
 )
 
 func (s *registerService) Register(ctx context.Context, in dto.RegisterRequest) (*dto.RegisterResult, error) {
@@ -175,8 +180,19 @@ func (s *registerService) registerTenantUser(ctx context.Context, in dto.Registe
 		return nil, ErrRegisterPasswordNotAllowed
 	}
 
-	// Password policy: validate against tenant security policies
-	if err := s.checkPasswordPolicy(ctx, in.Password, in.Email, "", tda.Settings().Security); err != nil {
+	// Password policy: tenant > global control plane > env > default.
+	resolvedPolicy, resolveErr := passwordpolicy.ResolveForTenant(
+		ctx,
+		s.deps.DAL,
+		in.TenantID,
+		s.deps.PasswordPolicyGlobalTenant,
+		s.deps.PasswordPolicyEnv,
+	)
+	if resolveErr != nil {
+		log.Debug("failed to resolve effective password policy", logger.Err(resolveErr))
+		return nil, ErrRegisterInvalidClient
+	}
+	if err := s.checkPasswordPolicy(ctx, in.Password, in.Email, "", &resolvedPolicy.Policy); err != nil {
 		log.Debug("password policy violation", logger.Err(err))
 		return nil, err // Return the error directly to preserve the detailed message
 	}
@@ -344,10 +360,6 @@ func (s *registerService) issueTokens(ctx context.Context, tda store.TenantDataA
 
 // checkPasswordPolicy validates the password against configured policies.
 func (s *registerService) checkPasswordPolicy(ctx context.Context, pwd, email, name string, policy *repository.SecurityPolicy) error {
-	if !passwordpolicy.HasConfiguredRules(policy) {
-		return nil
-	}
-
 	violations := passwordpolicy.Validate(pwd, policy, passwordpolicy.ValidationContext{
 		Email:         email,
 		Name:          name,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -73,7 +74,7 @@ func (s *authService) Login(ctx context.Context, req dto.AdminLoginRequest) (*dt
 
 	admin, err := s.cp.GetAdminByEmail(ctx, req.Email)
 	if err != nil {
-		if repository.IsNotFound(err) {
+		if repository.IsNotFound(err) || errors.Is(err, controlplane.ErrAdminNotFound) {
 			s.emitAuthEvent(ctx, audit.EventLoginFailed, audit.ResultFailure, "", "", map[string]any{
 				"method": "admin_password",
 				"reason": "invalid_credentials",
@@ -115,16 +116,6 @@ func (s *authService) Login(ctx context.Context, req dto.AdminLoginRequest) (*dt
 		})
 		log.Warn("admin has not accepted invite yet")
 		return nil, ErrAdminDisabled
-	}
-
-	// Reject pending_verification (registered but email not confirmed yet)
-	if admin.Status == "pending_verification" {
-		s.emitAuthEvent(ctx, audit.EventLoginFailed, audit.ResultFailure, admin.ID, string(admin.Type), map[string]any{
-			"method": "admin_password",
-			"reason": "admin_pending_verification",
-		})
-		log.Warn("admin has not verified email yet")
-		return nil, ErrAdminNotVerified
 	}
 
 	accessToken, expiresIn, err := s.issuer.IssueAdminAccess(ctx, jwt.AdminAccessClaims{
@@ -199,7 +190,7 @@ func (s *authService) Refresh(ctx context.Context, req dto.AdminRefreshRequest) 
 	tokenHash := hashToken(req.RefreshToken)
 	adminRefresh, err := s.cp.GetAdminRefreshToken(ctx, tokenHash)
 	if err != nil {
-		if repository.IsNotFound(err) {
+		if repository.IsNotFound(err) || errors.Is(err, controlplane.ErrRefreshTokenNotFound) {
 			s.emitAuthEvent(ctx, audit.EventTokenRefreshed, audit.ResultFailure, "", "", map[string]any{
 				"method": "admin_refresh",
 				"reason": "invalid_refresh_token",
@@ -226,6 +217,14 @@ func (s *authService) Refresh(ctx context.Context, req dto.AdminRefreshRequest) 
 
 	admin, err := s.cp.GetAdmin(ctx, adminRefresh.AdminID)
 	if err != nil {
+		if repository.IsNotFound(err) || errors.Is(err, controlplane.ErrAdminNotFound) {
+			s.emitAuthEvent(ctx, audit.EventTokenRefreshed, audit.ResultFailure, adminRefresh.AdminID, "", map[string]any{
+				"method": "admin_refresh",
+				"reason": "admin_not_found",
+			})
+			log.Warn("admin not found for refresh token")
+			return nil, ErrInvalidRefreshToken
+		}
 		s.emitAuthEvent(ctx, audit.EventTokenRefreshed, audit.ResultError, adminRefresh.AdminID, "", map[string]any{
 			"method": "admin_refresh",
 			"reason": "admin_lookup_failed",

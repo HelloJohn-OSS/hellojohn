@@ -65,12 +65,12 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 	emailKey := globalCfg.SecretboxMasterKey
 
 	// 2. Data Store (DAL + Manager)
-	// Construir GlobalDB config si se provee GLOBAL_DB_DSN
+	// Construir GlobalDB config si se provee GLOBAL_CONTROL_PLANE_DSN
 	var globalDB *store.DBConfig
-	if globalCfg.GlobalDBDSN != "" {
+	if globalCfg.GlobalControlPlaneDSN != "" {
 		globalDB = &store.DBConfig{
-			Driver: globalCfg.GlobalDBDriver,
-			DSN:    globalCfg.GlobalDBDSN,
+			Driver: globalCfg.GlobalControlPlaneDriver,
+			DSN:    globalCfg.GlobalControlPlaneDSN,
 		}
 	}
 
@@ -79,8 +79,8 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 	var globalPool *pgxpool.Pool
 	var usageRepo repository.UsageRepository
 	var migJobRepo repository.MigrationJobRepository
-	if globalCfg.GlobalDBDSN != "" && (globalCfg.GlobalDBDriver == "" || globalCfg.GlobalDBDriver == "postgres" || globalCfg.GlobalDBDriver == "pg") {
-		if poolCfg, err := pgxpool.ParseConfig(globalCfg.GlobalDBDSN); err == nil {
+	if globalCfg.GlobalControlPlaneDSN != "" && (globalCfg.GlobalControlPlaneDriver == "" || globalCfg.GlobalControlPlaneDriver == "postgres" || globalCfg.GlobalControlPlaneDriver == "pg") {
+		if poolCfg, err := pgxpool.ParseConfig(globalCfg.GlobalControlPlaneDSN); err == nil {
 			if pool, err2 := pgxpool.NewWithConfig(ctx, poolCfg); err2 == nil {
 				globalPool = pool
 			}
@@ -92,7 +92,7 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 	var globalMigrFS embed.FS
 	var globalMigrDir string
 	if globalDB != nil {
-		switch globalCfg.GlobalDBDriver {
+		switch globalCfg.GlobalControlPlaneDriver {
 		case "mysql":
 			// TODO SA-MySQL: agregar migrations/mysql/embed.go cuando existan SQLs MySQL globales
 			// Por ahora MySQL no tiene auto-migration de Global DB
@@ -119,7 +119,7 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 
 	manager, err := store.NewManager(ctx, store.ManagerConfig{
 		FSRoot:           globalCfg.FSRoot,
-		GlobalDB:         globalDB, // nil si no hay GLOBAL_DB_DSN → modo FS-only sin regresión
+		GlobalDB:         globalDB, // nil si no hay GLOBAL_CONTROL_PLANE_DSN → modo FS-only sin regresión
 		SigningMasterKey: masterKey,
 		Logger:           log.Default(),
 		// Migraciones per-tenant embebidas
@@ -443,6 +443,9 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 		EtlJobRepo: migJobRepo,
 		// Bot Protection
 		BotProtection: botSvc,
+		// Password Policy fallback chain
+		PasswordPolicyGlobalTenant: globalCfg.PasswordPolicyGlobalTenant,
+		PasswordPolicyEnv:          globalCfg.PasswordPolicyEnv,
 	}
 
 	// SA.2: System Management — instanciar service + controllers
@@ -451,8 +454,8 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 	systemService := syssvc.New(syssvc.SystemDeps{
 		DAL:          manager,
 		FSRoot:       globalCfg.FSRoot,
-		GlobalDSN:    globalCfg.GlobalDBDSN,
-		GlobalDriver: globalCfg.GlobalDBDriver,
+		GlobalDSN:    globalCfg.GlobalControlPlaneDSN,
+		GlobalDriver: globalCfg.GlobalControlPlaneDriver,
 		Logger:       log.Default(),
 		StartTime:    time.Now(),
 		Version:      "", // vacío en dev; setear con APP_VERSION si se desea
@@ -507,6 +510,7 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 		globalCfg:        globalCfg,
 		globalPool:       globalPool,
 		controlPlane:     cpService,
+		dal:              manager,
 		proxy:            proxyForCloud,
 	})
 
@@ -573,6 +577,7 @@ type cloudDeps struct {
 	globalCfg        GlobalConfig
 	globalPool       *pgxpool.Pool
 	controlPlane     cp.Service
+	dal              store.DataAccessLayer
 	proxy            cloudsvc.ProxyService // EPIC_014: relay hub injection point
 }
 

@@ -32,8 +32,8 @@ services:
       context: ../../
       dockerfile: Dockerfile
     environment:
-      GLOBAL_DB_DSN: "postgres://cp_admin:secret_password@db:5432/hellojohn_cp?sslmode=disable"
-      GLOBAL_DB_DRIVER: "pg"
+      GLOBAL_CONTROL_PLANE_DSN: "postgres://cp_admin:secret_password@db:5432/hellojohn_cp?sslmode=disable"
+      GLOBAL_CONTROL_PLANE_DRIVER: "pg"
       FS_ROOT: "/data/hellojohn"
       BASE_URL: "http://localhost:8080"
       V2_SERVER_ADDR: ":8080"
@@ -54,8 +54,8 @@ services:
       context: ../../
       dockerfile: Dockerfile
     environment:
-      GLOBAL_DB_DSN: "postgres://cp_admin:secret_password@db:5432/hellojohn_cp?sslmode=disable"
-      GLOBAL_DB_DRIVER: "pg"
+      GLOBAL_CONTROL_PLANE_DSN: "postgres://cp_admin:secret_password@db:5432/hellojohn_cp?sslmode=disable"
+      GLOBAL_CONTROL_PLANE_DRIVER: "pg"
       FS_ROOT: "/data/hellojohn"
       BASE_URL: "http://localhost:8081"
       V2_SERVER_ADDR: ":8080"

@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
 	dto "github.com/dropDatabas3/hellojohn/internal/http/dto/session"
+	"github.com/dropDatabas3/hellojohn/internal/passwordpolicy"
 )
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -124,13 +126,24 @@ type GlobalConfig struct {
 	AuditOverflowLogPath     string
 
 	// â”€â”€â”€ Global DB (Control Plane) â”€â”€â”€
-	GlobalDBDSN    string // DSN de la Global DB (opcional, para EPIC 008)
-	GlobalDBDriver string // "pg" | "mysql" (default "pg")
+	GlobalControlPlaneDSN    string // DSN de la DB del Control Plane global
+	GlobalControlPlaneDriver string // "pg" | "mysql" (default "pg")
+
+	// Admin seeding — crea el primer admin si cp_admin está vacía al arrancar.
+	// Solo aplica cuando GlobalControlPlaneDSN está configurada. No usar en prod con datos reales.
+	AdminSeedEmail    string // ADMIN_SEED_EMAIL
+	AdminSeedPassword string // ADMIN_SEED_PASSWORD
 
 	// Global Data Plane (Shared DB con RLS)
 	GlobalDataPlaneDSN          string // GLOBAL_DATA_PLANE_DSN
 	GlobalDataPlaneMaxOpenConns int    // GLOBAL_DATA_PLANE_MAX_OPEN_CONNS (default 25)
 	GlobalDataPlaneMaxIdleConns int    // GLOBAL_DATA_PLANE_MAX_IDLE_CONNS (default 5)
+
+	// Password Policy fallback chain:
+	// tenant > global control plane > env > default (OSS)
+	// global control plane > env > default (Cloud admin auth)
+	PasswordPolicyGlobalTenant string                     // PASSWORD_POLICY_GLOBAL_TENANT (default "system")
+	PasswordPolicyEnv          *repository.SecurityPolicy // SECURITY_PASSWORD_POLICY_* (optional)
 
 	// ─── Cloud Control Plane (EPIC_013) ───
 	CloudOIDCIssuer       string // URL base del IdP HJ para cloud auth
@@ -290,7 +303,7 @@ func LoadGlobalConfig() GlobalConfig {
 	if systemSMTPPort <= 0 {
 		systemSMTPPort = 587
 	}
-	systemSMTPUser := strings.TrimSpace(os.Getenv("SMTP_USER"))
+	systemSMTPUser := getenvStringFirst([]string{"SMTP_USER", "SMTP_USERNAME"}, "")
 	systemSMTPPassword := strings.TrimSpace(os.Getenv("SMTP_PASSWORD"))
 	systemSMTPFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
 
@@ -314,13 +327,19 @@ func LoadGlobalConfig() GlobalConfig {
 	auditOverflowLogPath := getenvStringDefault("AUDIT_OVERFLOW_LOG_PATH", "data/controlplane/audit-overflow.log")
 
 	// â”€â”€â”€ Global DB (Control Plane â€” EPIC 008) â”€â”€â”€
-	globalDBDSN := strings.TrimSpace(os.Getenv("GLOBAL_DB_DSN"))
-	globalDBDriver := getenvStringDefault("GLOBAL_DB_DRIVER", "pg")
+	globalControlPlaneDSN := getenvStringFirst([]string{"GLOBAL_CONTROL_PLANE_DSN", "GLOBAL_DB_DSN"}, "")
+	globalControlPlaneDriver := getenvStringFirst([]string{"GLOBAL_CONTROL_PLANE_DRIVER", "GLOBAL_DB_DRIVER"}, "pg")
+	adminSeedEmail := strings.TrimSpace(os.Getenv("ADMIN_SEED_EMAIL"))
+	adminSeedPassword := strings.TrimSpace(os.Getenv("ADMIN_SEED_PASSWORD"))
 
 	// Global Data Plane (EPIC GDP)
 	gdpDSN := strings.TrimSpace(os.Getenv("GLOBAL_DATA_PLANE_DSN"))
 	gdpMaxOpen := getenvIntDefault("GLOBAL_DATA_PLANE_MAX_OPEN_CONNS", 25)
 	gdpMaxIdle := getenvIntDefault("GLOBAL_DATA_PLANE_MAX_IDLE_CONNS", 5)
+
+	// Password Policy fallback chain
+	passwordPolicyGlobalTenant := strings.TrimSpace(getenvStringDefault("PASSWORD_POLICY_GLOBAL_TENANT", "system"))
+	passwordPolicyEnv := loadEnvPasswordPolicyFromEnv()
 
 	// ─── Cloud Control Plane (EPIC_013) ───
 	cloudOIDCIssuer := strings.TrimRight(strings.TrimSpace(os.Getenv("CLOUD_OIDC_ISSUER")), "/")
@@ -437,8 +456,10 @@ func LoadGlobalConfig() GlobalConfig {
 		AuditControlPlaneLogPath: auditControlPlaneLogPath,
 		AuditOverflowLogPath:     auditOverflowLogPath,
 
-		GlobalDBDSN:    globalDBDSN,
-		GlobalDBDriver: globalDBDriver,
+		GlobalControlPlaneDSN:    globalControlPlaneDSN,
+		GlobalControlPlaneDriver: globalControlPlaneDriver,
+		AdminSeedEmail:           adminSeedEmail,
+		AdminSeedPassword:        adminSeedPassword,
 
 		CloudOIDCIssuer:       cloudOIDCIssuer,
 		CloudOIDCClientID:     cloudOIDCClientID,
@@ -455,6 +476,8 @@ func LoadGlobalConfig() GlobalConfig {
 		GlobalDataPlaneDSN:          gdpDSN,
 		GlobalDataPlaneMaxOpenConns: gdpMaxOpen,
 		GlobalDataPlaneMaxIdleConns: gdpMaxIdle,
+		PasswordPolicyGlobalTenant:  passwordPolicyGlobalTenant,
+		PasswordPolicyEnv:           passwordPolicyEnv,
 
 		RateLimitEnabled: rateLimitEnabled,
 		RateLimitMax:     rateLimitMax,
@@ -629,6 +652,78 @@ func getenvIntDefault(key string, def int) int {
 		return def
 	}
 	return v
+}
+
+func getenvBoolFirstOptional(keys []string) (bool, bool) {
+	for _, key := range keys {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		v, err := strconv.ParseBool(raw)
+		if err == nil {
+			return v, true
+		}
+	}
+	return false, false
+}
+
+func getenvIntFirstOptional(keys []string) (int, bool) {
+	for _, key := range keys {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		v, err := strconv.Atoi(raw)
+		if err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func loadEnvPasswordPolicyFromEnv() *repository.SecurityPolicy {
+	policy := passwordpolicy.EffectiveSecurityPolicy(nil)
+	configured := false
+
+	if minLength, ok := getenvIntFirstOptional([]string{"SECURITY_PASSWORD_POLICY_MIN_LENGTH"}); ok {
+		if minLength > 0 {
+			policy.PasswordMinLength = minLength
+		}
+		configured = true
+	}
+
+	if requireUpper, ok := getenvBoolFirstOptional([]string{"SECURITY_PASSWORD_POLICY_REQUIRE_UPPER", "SECURITY_PASSWORD_POLICY_REQUIRE_UPPERCASE"}); ok {
+		policy.RequireUppercase = requireUpper
+		configured = true
+	}
+	if requireLower, ok := getenvBoolFirstOptional([]string{"SECURITY_PASSWORD_POLICY_REQUIRE_LOWER", "SECURITY_PASSWORD_POLICY_REQUIRE_LOWERCASE"}); ok {
+		policy.RequireLowercase = requireLower
+		configured = true
+	}
+	if requireNumbers, ok := getenvBoolFirstOptional([]string{"SECURITY_PASSWORD_POLICY_REQUIRE_DIGIT", "SECURITY_PASSWORD_POLICY_REQUIRE_NUMBER", "SECURITY_PASSWORD_POLICY_REQUIRE_NUMBERS"}); ok {
+		policy.RequireNumbers = requireNumbers
+		configured = true
+	}
+	if requireSymbols, ok := getenvBoolFirstOptional([]string{"SECURITY_PASSWORD_POLICY_REQUIRE_SYMBOL", "SECURITY_PASSWORD_POLICY_REQUIRE_SPECIAL", "SECURITY_PASSWORD_POLICY_REQUIRE_SPECIAL_CHAR", "SECURITY_PASSWORD_POLICY_REQUIRE_SPECIAL_CHARS"}); ok {
+		policy.RequireSpecialChars = requireSymbols
+		configured = true
+	}
+	if maxHistory, ok := getenvIntFirstOptional([]string{"SECURITY_PASSWORD_POLICY_MAX_HISTORY"}); ok {
+		if maxHistory >= 0 {
+			policy.MaxHistory = maxHistory
+		}
+		configured = true
+	}
+	if breachDetection, ok := getenvBoolFirstOptional([]string{"SECURITY_PASSWORD_POLICY_BREACH_DETECTION"}); ok {
+		policy.BreachDetection = breachDetection
+		configured = true
+	}
+
+	if !configured {
+		return nil
+	}
+	return &policy
 }
 
 func parseCSV(s string) []string {

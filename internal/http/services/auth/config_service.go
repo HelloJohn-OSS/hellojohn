@@ -11,9 +11,9 @@ import (
 	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
 	dto "github.com/dropDatabas3/hellojohn/internal/http/dto/auth"
 	"github.com/dropDatabas3/hellojohn/internal/http/helpers"
+	bot "github.com/dropDatabas3/hellojohn/internal/http/services/bot"
 	"github.com/dropDatabas3/hellojohn/internal/observability/logger"
 	"github.com/dropDatabas3/hellojohn/internal/passwordpolicy"
-	bot "github.com/dropDatabas3/hellojohn/internal/http/services/bot"
 	store "github.com/dropDatabas3/hellojohn/internal/store"
 	"go.uber.org/zap"
 )
@@ -26,9 +26,11 @@ type ConfigService interface {
 
 // ConfigDeps contains dependencies for the config service.
 type ConfigDeps struct {
-	DAL           store.DataAccessLayer
-	DataRoot      string // Path to data root for logo file reading
-	BotProtection bot.BotProtectionService
+	DAL                        store.DataAccessLayer
+	DataRoot                   string // Path to data root for logo file reading
+	BotProtection              bot.BotProtectionService
+	PasswordPolicyGlobalTenant string
+	PasswordPolicyEnv          *repository.SecurityPolicy
 }
 
 type configService struct {
@@ -208,38 +210,49 @@ func filterSocialProviders(providers []string) []string {
 // If tenantID is empty, returns secure defaults.
 func (s *configService) GetPasswordPolicy(ctx context.Context, tenantID string) (*dto.PasswordPolicyResult, error) {
 	tenantID = strings.TrimSpace(tenantID)
-	result := &dto.PasswordPolicyResult{
-		Configured: false,
-		MaxLength:  passwordpolicy.DefaultMaxLength,
-	}
+	var (
+		resolved passwordpolicy.ResolvedPolicy
+		err      error
+	)
 
 	if tenantID != "" {
-		tda, err := s.deps.DAL.ForTenant(ctx, tenantID)
+		resolved, err = passwordpolicy.ResolveForTenant(
+			ctx,
+			s.deps.DAL,
+			tenantID,
+			s.deps.PasswordPolicyGlobalTenant,
+			s.deps.PasswordPolicyEnv,
+		)
 		if err != nil {
 			return nil, ErrConfigTenantNotFound
 		}
-		if tda != nil {
-			result.TenantID = tda.ID()
-			if result.TenantID == "" {
-				return nil, fmt.Errorf("tenant canonical id is empty")
-			}
-
-			security := tda.Settings().Security
-			if passwordpolicy.HasConfiguredRules(security) {
-				result.Configured = true
-				result.MinLength = security.PasswordMinLength
-				result.RequireUppercase = security.RequireUppercase
-				result.RequireLowercase = security.RequireLowercase
-				result.RequireNumbers = security.RequireNumbers
-				result.RequireSymbols = security.RequireSpecialChars
-				result.MaxHistory = security.MaxHistory
-				result.BreachDetection = security.BreachDetection
-				// These checks are applied when policy mode is active.
-				result.CommonPassword = true
-				result.PersonalInfo = true
-			}
-		}
+	} else {
+		resolved = passwordpolicy.ResolveForCloud(
+			ctx,
+			s.deps.DAL,
+			s.deps.PasswordPolicyGlobalTenant,
+			s.deps.PasswordPolicyEnv,
+		)
 	}
 
+	result := &dto.PasswordPolicyResult{
+		Configured:       resolved.Configured,
+		Source:           string(resolved.Source),
+		TenantID:         resolved.TenantID,
+		MinLength:        resolved.Policy.PasswordMinLength,
+		MaxLength:        passwordpolicy.DefaultMaxLength,
+		RequireUppercase: resolved.Policy.RequireUppercase,
+		RequireLowercase: resolved.Policy.RequireLowercase,
+		RequireNumbers:   resolved.Policy.RequireNumbers,
+		RequireSymbols:   resolved.Policy.RequireSpecialChars,
+		MaxHistory:       resolved.Policy.MaxHistory,
+		BreachDetection:  resolved.Policy.BreachDetection,
+		CommonPassword:   true,
+		PersonalInfo:     true,
+	}
+
+	if result.MinLength <= 0 {
+		result.MinLength = passwordpolicy.DefaultMinLength
+	}
 	return result, nil
 }

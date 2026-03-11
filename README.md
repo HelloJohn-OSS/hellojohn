@@ -67,7 +67,7 @@ It implements the full **OAuth2 + OpenID Connect** specification, supports **9 s
 - **Argon2id** password hashing
 
 ### Infrastructure
-- **Control Plane** — FileSystem-based, optional Global DB mode (`GLOBAL_DB_DSN`)
+- **Control Plane** — FileSystem-based, optional Global DB mode (`GLOBAL_CONTROL_PLANE_DSN`)
 - **Data Plane** — per-tenant PostgreSQL or MySQL; connection pool per tenant
 - **Cache** — Redis / in-memory, per-tenant
 - **System SMTP** — global fallback email service for transactional emails
@@ -200,12 +200,12 @@ All environment variables are read **once at startup** by `internal/http/server/
 
 ### Global Database (Control Plane — optional)
 
-Activating `GLOBAL_DB_DSN` switches the Control Plane from pure filesystem to a hybrid FS + DB mode. Without it, the system runs fully filesystem-based.
+Activating `GLOBAL_CONTROL_PLANE_DSN` switches the Control Plane from pure filesystem to a hybrid FS + DB mode. Without it, the system runs fully filesystem-based.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `GLOBAL_DB_DSN` | _(empty)_ | Global DB connection string. Example: `postgres://user:pass@localhost:5432/hellojohn_cp?sslmode=disable` |
-| `GLOBAL_DB_DRIVER` | `pg` | Driver: `pg` \| `mysql` |
+| `GLOBAL_CONTROL_PLANE_DSN` | _(empty)_ | Global DB connection string. Example: `postgres://user:pass@localhost:5432/hellojohn_cp?sslmode=disable` |
+| `GLOBAL_CONTROL_PLANE_DRIVER` | `pg` | Driver: `pg` \| `mysql` |
 | `SYNC_DRY_RUN` | `false` | Set to `true` to simulate FS-to-DB migration without writing |
 
 ### System SMTP (global email fallback)

@@ -162,7 +162,9 @@ type Deps struct {
 	// ─── Bot Protection ───
 	// BotProtection valida tokens anti-bot en login y registro.
 	// Si nil, la validación se omite (sin-op).
-	BotProtection bot.BotProtectionService
+	BotProtection              bot.BotProtectionService
+	PasswordPolicyGlobalTenant string
+	PasswordPolicyEnv          *repository.SecurityPolicy
 }
 
 // Services agrupa todos los sub-services por dominio.
@@ -243,6 +245,8 @@ func New(d Deps) *Services {
 			MFAAdaptiveStateTTL:         d.MFAAdaptiveStateTTL,
 			AuditBus:                    d.AuditBus,
 			BotProtection:               d.BotProtection,
+			PasswordPolicyGlobalTenant:  d.PasswordPolicyGlobalTenant,
+			PasswordPolicyEnv:           d.PasswordPolicyEnv,
 		}),
 		OIDC: oidc.NewServices(oidc.Deps{
 			JWKSCache:    d.JWKSCache,

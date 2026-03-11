@@ -71,6 +71,7 @@ type ConfigResult struct {
 // PasswordPolicyResponse is the public payload for GET /v2/auth/password-policy.
 type PasswordPolicyResponse struct {
 	Configured       bool   `json:"configured"`
+	Source           string `json:"source,omitempty"`
 	TenantID         string `json:"tenant_id,omitempty"`
 	MinLength        int    `json:"min_length"`
 	MaxLength        int    `json:"max_length"`
@@ -87,6 +88,7 @@ type PasswordPolicyResponse struct {
 // PasswordPolicyResult is the internal service result for password policy.
 type PasswordPolicyResult struct {
 	Configured       bool
+	Source           string
 	TenantID         string
 	MinLength        int
 	MaxLength        int

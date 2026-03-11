@@ -97,6 +97,8 @@ func (c *RegisterController) handleError(w http.ResponseWriter, err error, log *
 		httperrors.WriteError(w, httperrors.ErrConflict.WithDetail("email already registered"))
 	case errors.Is(err, svc.ErrRegisterPolicyViolation):
 		httperrors.WriteError(w, httperrors.ErrBadRequest.WithDetail("password does not meet policy requirements"))
+	case errors.Is(err, svc.ErrRegisterVerificationUnavailable):
+		httperrors.WriteError(w, httperrors.ErrServiceUnavailable.WithDetail("email verification is required but SMTP delivery is unavailable"))
 	case errors.Is(err, svc.ErrNoDatabase):
 		httperrors.WriteError(w, httperrors.ErrServiceUnavailable.WithDetail("database not available for this tenant"))
 	case errors.Is(err, svc.ErrRegisterFSAdminNotAvailable):

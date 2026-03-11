@@ -6,6 +6,7 @@ import (
 
 	"github.com/dropDatabas3/hellojohn/internal/audit"
 	"github.com/dropDatabas3/hellojohn/internal/cache"
+	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
 	emailv2 "github.com/dropDatabas3/hellojohn/internal/email"
 	bot "github.com/dropDatabas3/hellojohn/internal/http/services/bot"
 	socialsvc "github.com/dropDatabas3/hellojohn/internal/http/services/social"
@@ -59,6 +60,10 @@ type Deps struct {
 	// BotProtection para validación anti-bot en login y registro.
 	// Si nil, se usa NoopService (no hay validación).
 	BotProtection bot.BotProtectionService
+
+	// Password Policy fallback chain configuration.
+	PasswordPolicyGlobalTenant string
+	PasswordPolicyEnv          *repository.SecurityPolicy
 }
 
 // Services agrupa todos los services del dominio auth.
@@ -132,16 +137,18 @@ func NewServices(d Deps) Services {
 			SessionCache: d.SessionCache,
 		}),
 		Register: NewRegisterService(RegisterDeps{
-			DAL:                d.DAL,
-			Issuer:             d.Issuer,
-			RefreshTTL:         d.RefreshTTL,
-			ClaimsHook:         d.ClaimsHook,
-			BlacklistPath:      d.BlacklistPath,
-			AutoLogin:          d.AutoLogin,
-			FSAdminEnabled:     d.FSAdminEnabled,
-			VerificationSender: EmailVerificationSender{Email: d.Email},
-			AuditBus:           d.AuditBus,
-			BotProtection:      d.BotProtection,
+			DAL:                        d.DAL,
+			Issuer:                     d.Issuer,
+			RefreshTTL:                 d.RefreshTTL,
+			ClaimsHook:                 d.ClaimsHook,
+			BlacklistPath:              d.BlacklistPath,
+			AutoLogin:                  d.AutoLogin,
+			FSAdminEnabled:             d.FSAdminEnabled,
+			VerificationSender:         EmailVerificationSender{Email: d.Email},
+			AuditBus:                   d.AuditBus,
+			BotProtection:              d.BotProtection,
+			PasswordPolicyGlobalTenant: d.PasswordPolicyGlobalTenant,
+			PasswordPolicyEnv:          d.PasswordPolicyEnv,
 		}),
 		InvitationAccept: NewInvitationAcceptService(InvitationAcceptDeps{
 			DAL:        d.DAL,
@@ -157,9 +164,11 @@ func NewServices(d Deps) Services {
 			BaseURL:    d.BaseURL,
 		}),
 		Config: NewConfigService(ConfigDeps{
-			DAL:           d.DAL,
-			DataRoot:      d.DataRoot,
-			BotProtection: d.BotProtection,
+			DAL:                        d.DAL,
+			DataRoot:                   d.DataRoot,
+			BotProtection:              d.BotProtection,
+			PasswordPolicyGlobalTenant: d.PasswordPolicyGlobalTenant,
+			PasswordPolicyEnv:          d.PasswordPolicyEnv,
 		}),
 		Providers: NewProvidersService(ProvidersDeps{
 			DAL:       d.DAL,

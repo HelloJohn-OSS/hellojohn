@@ -87,6 +87,7 @@ func (c *ConfigController) GetPasswordPolicy(w http.ResponseWriter, r *http.Requ
 
 	resp := dto.PasswordPolicyResponse{
 		Configured:       result.Configured,
+		Source:           result.Source,
 		TenantID:         result.TenantID,
 		MinLength:        result.MinLength,
 		MaxLength:        result.MaxLength,

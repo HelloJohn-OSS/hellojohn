@@ -23,8 +23,8 @@ type SystemDeps struct {
 	GlobalDSN    string // para maskDSN en status — NUNCA se expone completo
 	GlobalDriver string
 	Logger       *log.Logger
-	StartTime    time.Time // startup time del proceso (para calcular uptime)
-	Version      string    // build tag, vacío en dev
+	StartTime    time.Time          // startup time del proceso (para calcular uptime)
+	Version      string             // build tag, vacío en dev
 	Metrics      *metrics.Collector // nil si no está configurado
 }
 
@@ -78,7 +78,7 @@ func (s *systemService) GetStatus(ctx context.Context) (*dto.SystemStatusResult,
 // RunSync ejecuta o simula la migración FS→DB.
 func (s *systemService) RunSync(ctx context.Context, req dto.SyncRequest) (*dto.SyncResult, error) {
 	if s.deps.GlobalDSN == "" {
-		return nil, fmt.Errorf("no global DB configured: set GLOBAL_DB_DSN to enable sync")
+		return nil, fmt.Errorf("no global DB configured: set GLOBAL_CONTROL_PLANE_DSN to enable sync")
 	}
 
 	l := s.deps.Logger

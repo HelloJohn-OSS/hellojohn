@@ -9,9 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
+	"github.com/dropDatabas3/hellojohn/internal/security/password"
 )
 
 // cpAdminRepo implementa repository.AdminRepository sobre cp_admin.
@@ -22,6 +22,7 @@ type cpAdminRepo struct {
 func (r *cpAdminRepo) List(ctx context.Context, filter repository.AdminFilter) ([]repository.Admin, error) {
 	q := `
 		SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		       COALESCE(status, 'active'),
 		       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		       COALESCE(onboarding_completed, false),
 		       created_at, updated_at
@@ -71,6 +72,7 @@ func (r *cpAdminRepo) List(ctx context.Context, filter repository.AdminFilter) (
 func (r *cpAdminRepo) GetByID(ctx context.Context, id string) (*repository.Admin, error) {
 	const q = `
 		SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		       COALESCE(status, 'active'),
 		       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		       COALESCE(onboarding_completed, false),
 		       created_at, updated_at
@@ -89,6 +91,7 @@ func (r *cpAdminRepo) GetByID(ctx context.Context, id string) (*repository.Admin
 func (r *cpAdminRepo) GetByEmail(ctx context.Context, email string) (*repository.Admin, error) {
 	const q = `
 		SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		       COALESCE(status, 'active'),
 		       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		       COALESCE(onboarding_completed, false),
 		       created_at, updated_at
@@ -113,12 +116,17 @@ func (r *cpAdminRepo) Create(ctx context.Context, input repository.CreateAdminIn
 	if adminType == "" {
 		adminType = string(repository.AdminTypeGlobal)
 	}
+	statusValue := input.Status
+	if statusValue == "" {
+		statusValue = "active"
+	}
 	const q = `
 		INSERT INTO cp_admin
-			(email, password_hash, name, role, tenant_ids, email_verified, social_provider, plan, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now(), now())
+			(email, password_hash, name, role, tenant_ids, status, email_verified, social_provider, plan, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, now(), now())
 		ON CONFLICT (email) DO NOTHING
 		RETURNING id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		          COALESCE(status, 'active'),
 		          email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		          COALESCE(onboarding_completed, false),
 		          created_at, updated_at`
@@ -128,7 +136,7 @@ func (r *cpAdminRepo) Create(ctx context.Context, input repository.CreateAdminIn
 	}
 	row := r.pool.QueryRow(ctx, q,
 		input.Email, input.PasswordHash, input.Name, adminType, tenantSlugs,
-		input.EmailVerified, input.SocialProvider, planValue)
+		statusValue, input.EmailVerified, input.SocialProvider, planValue)
 	a, err := r.scanRow(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, repository.ErrConflict
@@ -185,6 +193,7 @@ func (r *cpAdminRepo) Update(ctx context.Context, id string, input repository.Up
 	q := fmt.Sprintf(`
 		UPDATE cp_admin SET %s WHERE id=$1
 		RETURNING id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+		          COALESCE(status, 'active'),
 		          email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 		          COALESCE(onboarding_completed, false),
 		          created_at, updated_at`,
@@ -213,7 +222,7 @@ func (r *cpAdminRepo) Delete(ctx context.Context, id string) error {
 }
 
 func (r *cpAdminRepo) CheckPassword(passwordHash, plainPassword string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(plainPassword)) == nil
+	return password.Verify(plainPassword, passwordHash)
 }
 
 func (r *cpAdminRepo) UpdateLastSeen(ctx context.Context, id string) error {
@@ -278,6 +287,7 @@ func (r *cpAdminRepo) SetInviteToken(ctx context.Context, id, tokenHash string, 
 // GetByInviteTokenHash implementa AdminRepository.GetByInviteTokenHash
 func (r *cpAdminRepo) GetByInviteTokenHash(ctx context.Context, tokenHash string) (*repository.Admin, error) {
 	const q = `SELECT id, email, password_hash, name, role, tenant_ids, enabled, last_seen_at, disabled_at,
+	       COALESCE(status, 'active'),
 	       email_verified, COALESCE(social_provider,''), COALESCE(plan,'free'),
 	       COALESCE(onboarding_completed, false),
 	       created_at, updated_at FROM cp_admin WHERE invite_token_hash=$1 AND status='pending'`
@@ -317,10 +327,12 @@ func (r *cpAdminRepo) scanRow(row interface {
 	var enabled bool
 	var lastSeenAt *time.Time
 	var disabledAt *time.Time
+	var status string
 
 	err := row.Scan(
 		&a.ID, &a.Email, &a.PasswordHash, &a.Name, &role,
 		&tenantIDs, &enabled, &lastSeenAt, &disabledAt,
+		&status,
 		&a.EmailVerified, &a.SocialProvider, &a.Plan,
 		&a.OnboardingCompleted,
 		&a.CreatedAt, &a.UpdatedAt,
@@ -331,6 +343,7 @@ func (r *cpAdminRepo) scanRow(row interface {
 	a.Type = repository.AdminType(role)
 	a.LastSeenAt = lastSeenAt
 	a.DisabledAt = disabledAt
+	a.Status = status
 
 	// tenant_ids es TEXT[] en PG; mapear directamente a []string.
 	a.AssignedTenants = tenantIDs

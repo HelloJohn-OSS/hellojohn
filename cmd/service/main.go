@@ -51,12 +51,18 @@ func main() {
 		if fsRoot == "" {
 			fsRoot = "data"
 		}
-		globalDSN := os.Getenv("GLOBAL_DB_DSN")
+		globalDSN := os.Getenv("GLOBAL_CONTROL_PLANE_DSN")
 		if globalDSN == "" {
-			fmt.Fprintln(os.Stderr, "sync-fs-to-db: GLOBAL_DB_DSN is required")
+			globalDSN = os.Getenv("GLOBAL_DB_DSN") // legacy fallback
+		}
+		if globalDSN == "" {
+			fmt.Fprintln(os.Stderr, "sync-fs-to-db: GLOBAL_CONTROL_PLANE_DSN is required")
 			os.Exit(1)
 		}
-		globalDriver := os.Getenv("GLOBAL_DB_DRIVER")
+		globalDriver := os.Getenv("GLOBAL_CONTROL_PLANE_DRIVER")
+		if globalDriver == "" {
+			globalDriver = os.Getenv("GLOBAL_DB_DRIVER") // legacy fallback
+		}
 		if globalDriver == "" {
 			globalDriver = "pg"
 		}

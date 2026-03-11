@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
+	"github.com/dropDatabas3/hellojohn/internal/security/password"
 	"github.com/dropDatabas3/hellojohn/internal/security/secretbox"
 )
 
@@ -880,7 +880,7 @@ func (r *cpAdminRepoMySQL) Delete(ctx context.Context, id string) error {
 }
 
 func (r *cpAdminRepoMySQL) CheckPassword(passwordHash, plainPassword string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(plainPassword)) == nil
+	return password.Verify(plainPassword, passwordHash)
 }
 
 func (r *cpAdminRepoMySQL) UpdateLastSeen(ctx context.Context, id string) error {

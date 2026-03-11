@@ -17,54 +17,58 @@ func RegisterTenantAdminRoutes(mux *http.ServeMux, deps AdminRouterDeps) {
 	}
 
 	c := deps.Controllers.Tenants
-	chain := sysAdminBaseChain(deps.Issuer, deps.RateLimiter, deps.AdminConfig, deps.APIKeyRepo)
+	collectionChain := sysAdminBaseChain(deps.Issuer, deps.RateLimiter, deps.AdminConfig, deps.APIKeyRepo)
+	tenantChain := adminBaseChain(deps.DAL, deps.Issuer, deps.RateLimiter, deps.APIKeyRepo, false)
 
-	wrap := func(h http.HandlerFunc) http.Handler {
-		return mw.Chain(h, chain...)
+	wrapCollection := func(h http.HandlerFunc) http.Handler {
+		return mw.Chain(h, collectionChain...)
 	}
 
-	// ─── Collection ───
-	mux.Handle("GET /v2/admin/tenants", wrap(c.ListTenants))
-	mux.Handle("POST /v2/admin/tenants", wrap(c.CreateTenant))
-	mux.Handle("POST /v2/admin/tenants/test-connection", wrap(c.TestConnection))
+	wrapTenant := func(h http.HandlerFunc) http.Handler {
+		return mw.Chain(h, tenantChain...)
+	}
 
-	// ─── Item CRUD ───
-	// tenant_id puede ser slug o UUID — DAL resuelve ambos
-	mux.Handle("GET /v2/admin/tenants/{tenant_id}", wrap(c.GetTenant))
-	mux.Handle("PUT /v2/admin/tenants/{tenant_id}", wrap(c.UpdateTenant))
-	mux.Handle("DELETE /v2/admin/tenants/{tenant_id}", wrap(c.DeleteTenant))
+	// Collection
+	mux.Handle("GET /v2/admin/tenants", wrapCollection(c.ListTenants))
+	mux.Handle("POST /v2/admin/tenants", wrapCollection(c.CreateTenant))
+	mux.Handle("POST /v2/admin/tenants/test-connection", wrapCollection(c.TestConnection))
 
-	// ─── Settings ───
-	mux.Handle("GET /v2/admin/tenants/{tenant_id}/settings", wrap(c.GetSettings))
-	mux.Handle("PUT /v2/admin/tenants/{tenant_id}/settings", wrap(c.UpdateSettings))
+	// Item CRUD
+	mux.Handle("GET /v2/admin/tenants/{tenant_id}", wrapTenant(c.GetTenant))
+	mux.Handle("PUT /v2/admin/tenants/{tenant_id}", wrapTenant(c.UpdateTenant))
+	mux.Handle("DELETE /v2/admin/tenants/{tenant_id}", wrapTenant(c.DeleteTenant))
 
-	// ─── Password Policy ───
-	mux.Handle("GET /v2/admin/tenants/{tenant_id}/password-policy", wrap(c.GetPasswordPolicy))
-	mux.Handle("PUT /v2/admin/tenants/{tenant_id}/password-policy", wrap(c.UpdatePasswordPolicy))
+	// Settings
+	mux.Handle("GET /v2/admin/tenants/{tenant_id}/settings", wrapTenant(c.GetSettings))
+	mux.Handle("PUT /v2/admin/tenants/{tenant_id}/settings", wrapTenant(c.UpdateSettings))
 
-	// ─── Migrations ───
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/migrate", wrap(c.MigrateTenant))
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/user-store/migrate", wrap(c.MigrateTenant))
+	// Password policy
+	mux.Handle("GET /v2/admin/tenants/{tenant_id}/password-policy", wrapTenant(c.GetPasswordPolicy))
+	mux.Handle("PUT /v2/admin/tenants/{tenant_id}/password-policy", wrapTenant(c.UpdatePasswordPolicy))
 
-	// ─── Schema ───
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/schema/apply", wrap(c.ApplySchema))
+	// Migrations
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/migrate", wrapTenant(c.MigrateTenant))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/user-store/migrate", wrapTenant(c.MigrateTenant))
 
-	// ─── Infra ───
-	mux.Handle("GET /v2/admin/tenants/{tenant_id}/infra-stats", wrap(c.InfraStats))
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/cache/test-connection", wrap(c.TestCache))
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/mailing/test", wrap(c.TestMailing))
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/user-store/test-connection", wrap(c.TestTenantDBConnection))
+	// Schema
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/schema/apply", wrapTenant(c.ApplySchema))
 
-	// ─── Import/Export ───
+	// Infra
+	mux.Handle("GET /v2/admin/tenants/{tenant_id}/infra-stats", wrapTenant(c.InfraStats))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/cache/test-connection", wrapTenant(c.TestCache))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/mailing/test", wrapTenant(c.TestMailing))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/user-store/test-connection", wrapTenant(c.TestTenantDBConnection))
+
+	// Import/Export
 	// Literal path /import must be registered before wildcard {tenant_id}/import routes.
-	mux.Handle("POST /v2/admin/tenants/import", wrap(c.ImportFromFile))
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/import/validate", wrap(c.ValidateImport))
-	mux.Handle("PUT /v2/admin/tenants/{tenant_id}/import", wrap(c.ImportConfig))
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/import", wrap(c.ImportConfig))
-	mux.Handle("GET /v2/admin/tenants/{tenant_id}/export", wrap(c.ExportConfig))
+	mux.Handle("POST /v2/admin/tenants/import", wrapCollection(c.ImportFromFile))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/import/validate", wrapTenant(c.ValidateImport))
+	mux.Handle("PUT /v2/admin/tenants/{tenant_id}/import", wrapTenant(c.ImportConfig))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/import", wrapTenant(c.ImportConfig))
+	mux.Handle("GET /v2/admin/tenants/{tenant_id}/export", wrapTenant(c.ExportConfig))
 
 	// Push: server-to-server tenant replication (browser never sees secrets)
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/push", wrap(c.PushTenant))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/push", wrapTenant(c.PushTenant))
 }
 
 // sysAdminBaseChain es similar a adminBaseChain pero SIN TenantResolution,
