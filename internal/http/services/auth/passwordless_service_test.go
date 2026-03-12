@@ -39,7 +39,7 @@ func (m *fakeEmailService) TestSMTP(ctx context.Context, t, e string, o *emailv2
 	return nil
 }
 
-func (m *fakeEmailService) Send(to string, subject string, htmlBody string, textBody string) error {
+func (m *fakeEmailService) Send(ctx context.Context, to string, subject string, htmlBody string, textBody string) error {
 	m.sentCount++
 	m.lastEmail = to
 	return nil

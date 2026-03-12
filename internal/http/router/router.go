@@ -47,8 +47,9 @@ type V2RouterDeps struct {
 	Issuer *jwtx.Issuer
 
 	// Middlewares
-	AuthMiddleware mw.Middleware  // JWT validation middleware
-	RateLimiter    mw.RateLimiter // Optional rate limiter
+	AuthMiddleware         mw.Middleware  // JWT validation middleware
+	RateLimiter            mw.RateLimiter // Optional rate limiter
+	MailingTestRateLimiter mw.RateLimiter // Tenant mailing test: max 5/min per tenant
 
 	// Admin Config (from GlobalConfig, no env reads in router)
 	AdminConfig mw.AdminConfig
@@ -89,12 +90,13 @@ func RegisterV2Routes(deps V2RouterDeps) {
 	// ===========================================================================
 	if deps.AdminControllers != nil {
 		RegisterAdminRoutes(mux, AdminRouterDeps{
-			DAL:         deps.DAL,
-			Issuer:      deps.Issuer,
-			Controllers: deps.AdminControllers,
-			RateLimiter: deps.RateLimiter,
-			AdminConfig: deps.AdminConfig,
-			APIKeyRepo:  deps.APIKeyRepo,
+			DAL:                    deps.DAL,
+			Issuer:                 deps.Issuer,
+			Controllers:            deps.AdminControllers,
+			RateLimiter:            deps.RateLimiter,
+			MailingTestRateLimiter: deps.MailingTestRateLimiter,
+			AdminConfig:            deps.AdminConfig,
+			APIKeyRepo:             deps.APIKeyRepo,
 		})
 	}
 

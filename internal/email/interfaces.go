@@ -7,7 +7,7 @@ import "context"
 type Sender interface {
 	// Send envía un email con contenido HTML y texto plano.
 	// El destinatario recibe ambas versiones como multipart/alternative.
-	Send(to string, subject string, htmlBody string, textBody string) error
+	Send(ctx context.Context, to string, subject string, htmlBody string, textBody string) error
 }
 
 // SenderProvider resuelve un Sender configurado para un tenant.

@@ -6,11 +6,12 @@ import (
 	"errors"
 	"net/http"
 
+	emailv2 "github.com/dropDatabas3/hellojohn/internal/email"
 	dto "github.com/dropDatabas3/hellojohn/internal/http/dto/admin"
 	httperrors "github.com/dropDatabas3/hellojohn/internal/http/errors"
 	syssvc "github.com/dropDatabas3/hellojohn/internal/http/services/system"
-	store "github.com/dropDatabas3/hellojohn/internal/store"
 	metrics "github.com/dropDatabas3/hellojohn/internal/metrics"
+	store "github.com/dropDatabas3/hellojohn/internal/store"
 )
 
 // StatusController maneja los endpoints /v2/system/*.
@@ -98,4 +99,5 @@ func (c *StatusController) GetPrometheusMetrics(w http.ResponseWriter, r *http.R
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	metrics.WritePrometheusFormat(w, snap)
+	emailv2.WritePrometheusEmailMetrics(w)
 }

@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 
+	"github.com/dropDatabas3/hellojohn/cmd/hjctl/client"
 	"github.com/spf13/cobra"
 )
 
@@ -18,16 +19,9 @@ func NewProviderCmd() *cobra.Command {
 	return cmd
 }
 
-// NewMailCmd creates the `mail` command group (stub — not yet implemented).
-func NewMailCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "mail",
-		Short: "Manage email templates and settings (coming soon)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("mail commands are not yet implemented")
-		},
-	}
-	return cmd
+// NewMailCmd creates the `mail` command group.
+func NewMailCmd(getClient func() (*client.Client, error), outputFmt func() string) *cobra.Command {
+	return newMailCommandGroup(getClient, outputFmt)
 }
 
 // NewOIDCCmd creates the `oidc` command group (stub — not yet implemented).

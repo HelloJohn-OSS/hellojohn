@@ -34,15 +34,15 @@ func TestSMTPFallback(t *testing.T) {
 	})
 
 	t.Run("health_check_disponible", func(t *testing.T) {
-		resp, err := http.Get(base + "/health")
+		resp, err := http.Get(base + "/readyz")
 		if err != nil {
 			t.Skipf("servidor no disponible: %v", err)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			t.Errorf("health check: esperaba 200, got %d", resp.StatusCode)
+			t.Errorf("readyz check: esperaba 200, got %d", resp.StatusCode)
 		}
-		t.Logf("health → %d ✓", resp.StatusCode)
+		t.Logf("readyz → %d ✓", resp.StatusCode)
 	})
 }

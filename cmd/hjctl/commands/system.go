@@ -90,6 +90,8 @@ func NewSystemCmd(getClient func() (*client.Client, error), outputFmt func() str
 		},
 	})
 
+	cmd.AddCommand(NewSystemMailCmd(getClient, outputFmt))
+
 	return cmd
 }
 

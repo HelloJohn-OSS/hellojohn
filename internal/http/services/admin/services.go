@@ -19,6 +19,7 @@ type Deps struct {
 	ControlPlane                controlplane.Service
 	Email                       emailv2.Service
 	SystemEmail                 emailv2.SystemEmailService // SMTP global para invites de admin (opcional)
+	SystemEmailEnv              emailv2.SystemEmailConfig
 	MasterKey                   string
 	Issuer                      *jwt.Issuer
 	RefreshTTL                  time.Duration // TTL para admin refresh tokens
@@ -35,7 +36,7 @@ type Deps struct {
 	TenantMigrationsFS          embed.FS // Tenant schema migrations for isolated DB
 	TenantMigrationsDir         string   // Directory within TenantMigrationsFS
 	// Optional: only populated when a global DB is configured
-	UsageRepo  repository.UsageRepository       // nil → usage not available
+	UsageRepo  repository.UsageRepository        // nil → usage not available
 	EtlJobRepo repository.MigrationJobRepository // nil → ETL not available
 }
 
@@ -65,6 +66,7 @@ type Services struct {
 	Migrate       MigrateService
 	Usage         UsageService
 	Etl           EtlService
+	SystemEmailCP SystemEmailService
 	ControlPlane  controlplane.Service // Exportar ControlPlane
 }
 
@@ -111,13 +113,14 @@ func NewServices(d Deps) Services {
 			GlobalAdaptiveThreshold: d.MFAAdaptiveFailureThreshold,
 			GlobalAdaptiveStateTTL:  d.MFAAdaptiveStateTTL,
 		}),
-		Cluster:      NewClusterService(ClusterDeps{DAL: d.DAL}),
-		Audit:        NewAuditService(d.DAL, d.AuditBus),
-		Import:       NewImportService(ImportDeps{DAL: d.DAL}),
-		Export:       NewExportService(ExportDeps{DAL: d.DAL}),
-		Migrate:      NewMigrateService(MigrateServiceDeps{DAL: d.DAL, ControlPlane: d.ControlPlane, TenantMigrations: d.TenantMigrationsFS, TenantMigrDir: d.TenantMigrationsDir}),
-		Usage:        NewUsageService(d.UsageRepo),
-		Etl:          NewEtlService(EtlDeps{DAL: d.DAL, JobRepo: d.EtlJobRepo, BaseURL: d.BaseURL}),
-		ControlPlane: d.ControlPlane,
+		Cluster:       NewClusterService(ClusterDeps{DAL: d.DAL}),
+		Audit:         NewAuditService(d.DAL, d.AuditBus),
+		Import:        NewImportService(ImportDeps{DAL: d.DAL}),
+		Export:        NewExportService(ExportDeps{DAL: d.DAL}),
+		Migrate:       NewMigrateService(MigrateServiceDeps{DAL: d.DAL, ControlPlane: d.ControlPlane, TenantMigrations: d.TenantMigrationsFS, TenantMigrDir: d.TenantMigrationsDir}),
+		Usage:         NewUsageService(d.UsageRepo),
+		Etl:           NewEtlService(EtlDeps{DAL: d.DAL, JobRepo: d.EtlJobRepo, BaseURL: d.BaseURL}),
+		SystemEmailCP: NewSystemEmailService(d.DAL, d.MasterKey, d.SystemEmailEnv, d.AuditBus),
+		ControlPlane:  d.ControlPlane,
 	}
 }

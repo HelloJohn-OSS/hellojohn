@@ -93,6 +93,7 @@ type TenantDataAccess interface {
 // ConfigAccess provee acceso al control plane (configuración global).
 type ConfigAccess interface {
 	Tenants() repository.TenantRepository
+	SystemSettings() repository.SystemSettingsRepository
 	Clients(tenantSlug string) repository.ClientRepository
 	Scopes(tenantSlug string) repository.ScopeRepository
 	Claims(tenantSlug string) repository.ClaimRepository

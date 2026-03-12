@@ -45,7 +45,7 @@ type TenantsService interface {
 	ApplySchema(ctx context.Context, slugOrID string, schema map[string]any) error
 	InfraStats(ctx context.Context, slugOrID string) (map[string]any, error)
 	TestCache(ctx context.Context, slugOrID string) error
-	TestMailing(ctx context.Context, slugOrID string, recipientEmail string) error
+	TestMailing(ctx context.Context, slugOrID string, req dto.SendTestEmailRequest) error
 
 	// Import/Export
 	ValidateImport(ctx context.Context, slugOrID string, req dto.TenantImportRequest) (*dto.ImportValidationResult, error)
@@ -120,19 +120,25 @@ func filterTenantsByAdminClaims(tenants []repository.Tenant, adminClaims *jwt.Ad
 		return []repository.Tenant{}
 	}
 
-	if strings.EqualFold(strings.TrimSpace(adminClaims.AdminType), "global") {
-		return tenants
-	}
-
 	if len(adminClaims.Tenants) == 0 {
 		return []repository.Tenant{}
 	}
 
+	wildcardAll := false
 	allowedRefs := make(map[string]struct{}, len(adminClaims.Tenants))
 	for _, entry := range adminClaims.Tenants {
-		if ref := normalizeTenantAccessRef(entry.Slug); ref != "" {
+		ref := normalizeTenantAccessRef(entry.Slug)
+		if ref == "*" {
+			wildcardAll = true
+			continue
+		}
+		if ref != "" {
 			allowedRefs[ref] = struct{}{}
 		}
+	}
+
+	if wildcardAll {
+		return tenants
 	}
 
 	filtered := make([]repository.Tenant, 0, len(tenants))
@@ -454,6 +460,10 @@ func (s *tenantsService) UpdateSettings(ctx context.Context, slugOrID string, se
 		return "", fmt.Errorf("%w: etag mismatch", store.ErrPreconditionFailed)
 	}
 
+	prevEmailProvider := auditEmailProviderLabel(t.Settings)
+	nextEmailProvider := auditEmailProviderLabel(settings)
+	emailProviderChanged := prevEmailProvider != nextEmailProvider
+
 	// 3. Validate and Encrypt
 	if settings.IssuerMode != "" && settings.IssuerMode != "global" && settings.IssuerMode != "path" && settings.IssuerMode != "domain" {
 		return "", fmt.Errorf("%w: invalid issuer_mode", repository.ErrInvalidInput)
@@ -471,17 +481,23 @@ func (s *tenantsService) UpdateSettings(ctx context.Context, slugOrID string, se
 	// 5. Update settings in control plane (FS)
 	if err := repos.UpdateSettings(ctx, t.Slug, &settings); err != nil {
 		emitAdminEvent(ctx, s.auditBus, t.ID, audit.EventTenantUpdated, t.ID, audit.TargetTenant, audit.ResultError, map[string]any{
-			"reason":      "update_settings_failed",
-			"method":      "update_settings",
-			"tenant_slug": t.Slug,
+			"reason":                 "update_settings_failed",
+			"method":                 "update_settings",
+			"tenant_slug":            t.Slug,
+			"email_provider_before":  prevEmailProvider,
+			"email_provider_after":   nextEmailProvider,
+			"email_provider_changed": emailProviderChanged,
 		})
 		log.Error("update settings failed", logger.Err(err))
 		return "", err
 	}
 
 	emitAdminEvent(ctx, s.auditBus, t.ID, audit.EventTenantUpdated, t.ID, audit.TargetTenant, audit.ResultSuccess, map[string]any{
-		"method":      "update_settings",
-		"tenant_slug": t.Slug,
+		"method":                 "update_settings",
+		"tenant_slug":            t.Slug,
+		"email_provider_before":  prevEmailProvider,
+		"email_provider_after":   nextEmailProvider,
+		"email_provider_changed": emailProviderChanged,
 	})
 
 	// 6. Handle DB connection changes
@@ -766,17 +782,133 @@ func (s *tenantsService) TestCache(ctx context.Context, slugOrID string) error {
 	return tda.Cache().Ping(ctx)
 }
 
-func (s *tenantsService) TestMailing(ctx context.Context, slugOrID string, recipientEmail string) error {
+func (s *tenantsService) TestMailing(ctx context.Context, slugOrID string, req dto.SendTestEmailRequest) error {
 	if s.email == nil {
 		return httperrors.ErrNotImplemented.WithDetail("mailing service not available")
 	}
 
-	if recipientEmail == "" {
+	to := strings.TrimSpace(req.To)
+	if to == "" {
 		return httperrors.ErrBadRequest.WithDetail("recipient email required")
 	}
 
-	// Test SMTP connection by sending a test email
-	return s.email.TestSMTP(ctx, slugOrID, recipientEmail, nil)
+	// Fast path: test with persisted tenant/global/env configuration chain.
+	if req.Provider == nil && req.SMTPOverride == nil {
+		return s.email.TestSMTP(ctx, slugOrID, to, nil)
+	}
+
+	cfg, err := mapMailingTestOverrideToProvider(req)
+	if err != nil {
+		return httperrors.ErrBadRequest.WithDetail(err.Error())
+	}
+
+	sender, err := emailv2.BuildSenderFromConfig(cfg, s.masterKey)
+	if err != nil {
+		return err
+	}
+
+	tenantName := slugOrID
+	tenantLang := "es"
+	if tenant, resolveErr := s.resolveTenant(ctx, slugOrID); resolveErr == nil && tenant != nil {
+		if strings.TrimSpace(tenant.Name) != "" {
+			tenantName = tenant.Name
+		}
+		if strings.TrimSpace(tenant.Language) != "" {
+			tenantLang = tenant.Language
+		}
+	}
+
+	timestamp := time.Now().Format("02 Jan 2006, 15:04:05 MST")
+	content := emailv2.GetTestEmailContent(tenantName, timestamp, tenantLang)
+	return sender.Send(ctx, to, content.Subject, content.HTMLBody, content.TextBody)
+}
+
+func mapMailingTestOverrideToProvider(req dto.SendTestEmailRequest) (emailv2.EmailProviderConfig, error) {
+	if req.Provider != nil {
+		kind := strings.ToLower(strings.TrimSpace(req.Provider.Kind))
+		if kind == "" {
+			return emailv2.EmailProviderConfig{}, fmt.Errorf("provider.kind is required")
+		}
+
+		cfg := emailv2.EmailProviderConfig{
+			Provider:  emailv2.ProviderKind(kind),
+			FromEmail: strings.TrimSpace(req.Provider.FromEmail),
+			ReplyTo:   strings.TrimSpace(req.Provider.ReplyTo),
+			TimeoutMs: req.Provider.TimeoutMs,
+			APIKey:    strings.TrimSpace(req.Provider.APIKey),
+			Domain:    strings.TrimSpace(req.Provider.Domain),
+			Region:    strings.ToLower(strings.TrimSpace(req.Provider.Region)),
+		}
+		if cfg.TimeoutMs <= 0 {
+			cfg.TimeoutMs = 10000
+		}
+
+		if cfg.Provider == emailv2.ProviderKindSMTP {
+			if req.SMTPOverride == nil {
+				return emailv2.EmailProviderConfig{}, fmt.Errorf("smtp override required for smtp provider")
+			}
+			return mapSMTPOverrideToProvider(*req.SMTPOverride, cfg.FromEmail)
+		}
+
+		if cfg.FromEmail == "" {
+			return emailv2.EmailProviderConfig{}, fmt.Errorf("provider.fromEmail is required")
+		}
+		if cfg.APIKey == "" {
+			return emailv2.EmailProviderConfig{}, fmt.Errorf("provider.apiKey is required")
+		}
+		if cfg.Provider == emailv2.ProviderKindMailgun {
+			if cfg.Domain == "" {
+				return emailv2.EmailProviderConfig{}, fmt.Errorf("provider.domain is required for mailgun")
+			}
+			if cfg.Region == "" {
+				cfg.Region = "us"
+			}
+		}
+		return cfg, nil
+	}
+
+	if req.SMTPOverride != nil {
+		return mapSMTPOverrideToProvider(*req.SMTPOverride, "")
+	}
+
+	return emailv2.EmailProviderConfig{}, fmt.Errorf("missing provider or smtp override")
+}
+
+func mapSMTPOverrideToProvider(in dto.SMTPOverride, fromOverride string) (emailv2.EmailProviderConfig, error) {
+	host := strings.TrimSpace(in.Host)
+	if host == "" {
+		return emailv2.EmailProviderConfig{}, fmt.Errorf("smtp.host is required")
+	}
+
+	port := in.Port
+	if port <= 0 {
+		port = 587
+	}
+
+	from := strings.TrimSpace(fromOverride)
+	if from == "" {
+		from = strings.TrimSpace(in.FromEmail)
+	}
+	if from == "" {
+		from = strings.TrimSpace(in.Username)
+	}
+	if from == "" {
+		return emailv2.EmailProviderConfig{}, fmt.Errorf("smtp.fromEmail is required")
+	}
+
+	cfg := emailv2.EmailProviderConfig{
+		Provider:  emailv2.ProviderKindSMTP,
+		FromEmail: from,
+		SMTP: &emailv2.SMTPConfig{
+			Host:      host,
+			Port:      port,
+			Username:  strings.TrimSpace(in.Username),
+			Password:  in.Password,
+			FromEmail: from,
+			UseTLS:    in.UseTLS,
+		},
+	}
+	return cfg, nil
 }
 
 func mapTenantToResponse(t repository.Tenant) dto.TenantResponse {
@@ -836,6 +968,23 @@ func mapTenantSettingsToDTO(s *repository.TenantSettings) *dto.TenantSettingsRes
 			PasswordEnc: s.SMTP.PasswordEnc,
 			FromEmail:   fromEmail,
 			UseTLS:      s.SMTP.UseTLS,
+		}
+	}
+
+	if s.EmailProvider != nil {
+		ep := s.EmailProvider
+		resp.EmailProvider = &dto.TenantEmailProviderResponse{
+			Provider:         ep.Provider,
+			FromEmail:        ep.FromEmail,
+			ReplyTo:          ep.ReplyTo,
+			TimeoutMs:        ep.TimeoutMs,
+			Domain:           ep.Domain,
+			Region:           ep.Region,
+			SMTPHost:         ep.SMTPHost,
+			SMTPPort:         ep.SMTPPort,
+			SMTPUsername:     ep.SMTPUsername,
+			SMTPUseTLS:       ep.SMTPUseTLS,
+			APIKeyConfigured: hasTenantProviderSecretConfigured(*ep),
 		}
 	}
 
@@ -1079,6 +1228,49 @@ func mapDTOToTenantSettings(req *dto.UpdateTenantSettingsRequest, existing *repo
 			result.SMTP.FromEmail = req.SMTP.FromEmail
 		}
 		result.SMTP.UseTLS = req.SMTP.UseTLS
+	}
+
+	if req.EmailProvider != nil {
+		if result.EmailProvider == nil {
+			result.EmailProvider = &repository.EmailProviderSettings{}
+		}
+		ep := result.EmailProvider
+		rep := req.EmailProvider
+
+		if rep.Provider != "" {
+			ep.Provider = rep.Provider
+		}
+		if rep.FromEmail != "" {
+			ep.FromEmail = rep.FromEmail
+		}
+		if rep.ReplyTo != "" {
+			ep.ReplyTo = rep.ReplyTo
+		}
+		if rep.TimeoutMs > 0 {
+			ep.TimeoutMs = rep.TimeoutMs
+		}
+		if rep.APIKey != "" {
+			ep.APIKey = rep.APIKey
+		}
+		if rep.Domain != "" {
+			ep.Domain = rep.Domain
+		}
+		if rep.Region != "" {
+			ep.Region = rep.Region
+		}
+		if rep.SMTPHost != "" {
+			ep.SMTPHost = rep.SMTPHost
+		}
+		if rep.SMTPPort > 0 {
+			ep.SMTPPort = rep.SMTPPort
+		}
+		if rep.SMTPUsername != "" {
+			ep.SMTPUsername = rep.SMTPUsername
+		}
+		if rep.SMTPPassword != "" {
+			ep.SMTPPassword = rep.SMTPPassword
+		}
+		ep.SMTPUseTLS = rep.SMTPUseTLS
 	}
 
 	if req.Cache != nil {
@@ -1806,6 +1998,41 @@ func (s *tenantsService) importSettings(ctx context.Context, tenant *repository.
 		existing.SMTP.UseTLS = settings.SMTP.UseTLS
 	}
 
+	if settings.EmailProvider != nil {
+		if existing.EmailProvider == nil {
+			existing.EmailProvider = &repository.EmailProviderSettings{}
+		}
+		ep := settings.EmailProvider
+		if ep.Provider != "" {
+			existing.EmailProvider.Provider = ep.Provider
+		}
+		if ep.FromEmail != "" {
+			existing.EmailProvider.FromEmail = ep.FromEmail
+		}
+		if ep.ReplyTo != "" {
+			existing.EmailProvider.ReplyTo = ep.ReplyTo
+		}
+		if ep.TimeoutMs > 0 {
+			existing.EmailProvider.TimeoutMs = ep.TimeoutMs
+		}
+		if ep.Domain != "" {
+			existing.EmailProvider.Domain = ep.Domain
+		}
+		if ep.Region != "" {
+			existing.EmailProvider.Region = ep.Region
+		}
+		if ep.SMTPHost != "" {
+			existing.EmailProvider.SMTPHost = ep.SMTPHost
+		}
+		if ep.SMTPPort > 0 {
+			existing.EmailProvider.SMTPPort = ep.SMTPPort
+		}
+		if ep.SMTPUsername != "" {
+			existing.EmailProvider.SMTPUsername = ep.SMTPUsername
+		}
+		existing.EmailProvider.SMTPUseTLS = ep.SMTPUseTLS
+	}
+
 	// UserDB — non-secret fields only (DSN set by importSecrets)
 	if settings.UserDB != nil {
 		if existing.UserDB == nil {
@@ -2004,6 +2231,20 @@ func (s *tenantsService) importSecrets(ctx context.Context, tenant *repository.T
 		}
 		existing.SMTP.Password = sec.SMTPPassword
 		changed = true
+	}
+	// Email provider secrets
+	if sec.EmailProviderAPIKey != "" || sec.EmailProviderSMTPPassword != "" {
+		if existing.EmailProvider == nil {
+			existing.EmailProvider = &repository.EmailProviderSettings{}
+		}
+		if sec.EmailProviderAPIKey != "" {
+			existing.EmailProvider.APIKey = sec.EmailProviderAPIKey
+			changed = true
+		}
+		if sec.EmailProviderSMTPPassword != "" {
+			existing.EmailProvider.SMTPPassword = sec.EmailProviderSMTPPassword
+			changed = true
+		}
 	}
 	// UserDB DSN
 	if sec.UserDBDSN != "" {
@@ -2550,6 +2791,19 @@ func (s *tenantsService) ExportConfig(ctx context.Context, slugOrID string, opts
 				secrets.SMTPPassword = plain
 			}
 		}
+		// Email provider secrets
+		if ts.EmailProvider != nil {
+			if ts.EmailProvider.APIKeyEnc != "" {
+				if plain, err := secretbox.Decrypt(ts.EmailProvider.APIKeyEnc); err == nil {
+					secrets.EmailProviderAPIKey = plain
+				}
+			}
+			if ts.EmailProvider.SMTPPasswordEnc != "" {
+				if plain, err := secretbox.Decrypt(ts.EmailProvider.SMTPPasswordEnc); err == nil {
+					secrets.EmailProviderSMTPPassword = plain
+				}
+			}
+		}
 		// UserDB DSN
 		if ts.UserDB != nil && ts.UserDB.DSNEnc != "" {
 			if plain, err := secretbox.Decrypt(ts.UserDB.DSNEnc); err == nil {
@@ -2659,4 +2913,24 @@ func (s *tenantsService) ExportConfig(ctx context.Context, slugOrID string, opts
 	}
 
 	return export, nil
+}
+
+func hasTenantProviderSecretConfigured(in repository.EmailProviderSettings) bool {
+	if strings.EqualFold(strings.TrimSpace(in.Provider), string(emailv2.ProviderKindSMTP)) {
+		return strings.TrimSpace(in.SMTPPasswordEnc) != ""
+	}
+	return strings.TrimSpace(in.APIKeyEnc) != ""
+}
+
+func auditEmailProviderLabel(settings repository.TenantSettings) string {
+	if settings.EmailProvider != nil {
+		provider := strings.TrimSpace(strings.ToLower(settings.EmailProvider.Provider))
+		if provider != "" {
+			return provider
+		}
+	}
+	if settings.SMTP != nil && strings.TrimSpace(settings.SMTP.Host) != "" {
+		return "smtp_legacy"
+	}
+	return "none"
 }

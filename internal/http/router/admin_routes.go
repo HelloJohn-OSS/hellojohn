@@ -15,12 +15,13 @@ import (
 
 // AdminRouterDeps contiene las dependencias para el router admin.
 type AdminRouterDeps struct {
-	DAL         store.DataAccessLayer
-	Issuer      *jwtx.Issuer
-	Controllers *ctrl.Controllers
-	RateLimiter mw.RateLimiter              // Opcional: rate limiter por IP
-	AdminConfig mw.AdminConfig              // Admin enforcement config (from GlobalConfig)
-	APIKeyRepo  repository.APIKeyRepository // API key auth (optional, enables X-API-Key header)
+	DAL                    store.DataAccessLayer
+	Issuer                 *jwtx.Issuer
+	Controllers            *ctrl.Controllers
+	RateLimiter            mw.RateLimiter              // Opcional: rate limiter por IP
+	MailingTestRateLimiter mw.RateLimiter              // POST /mailing/test: max 5/min por tenant
+	AdminConfig            mw.AdminConfig              // Admin enforcement config (from GlobalConfig)
+	APIKeyRepo             repository.APIKeyRepository // API key auth (optional, enables X-API-Key header)
 }
 
 // RegisterAdminRoutes registra todas las rutas administrativas en un mux.
@@ -44,6 +45,9 @@ func RegisterAdminRoutes(mux *http.ServeMux, deps AdminRouterDeps) {
 	adminGlobalMW := func(h http.Handler) http.Handler {
 		return mw.Chain(h, mw.RequireAdminAuth(issuer), mw.RequireGlobalAdmin())
 	}
+	adminGlobalAPIKeyMW := func(h http.Handler) http.Handler {
+		return mw.Chain(h, mw.RequireAdminAuthOrAPIKey(issuer, apiKeyRepo), mw.RequireGlobalAdmin())
+	}
 	mux.Handle("GET /v2/admin/admins", adminGlobalMW(http.HandlerFunc(c.Admins.List)))
 	mux.Handle("POST /v2/admin/admins", adminGlobalMW(http.HandlerFunc(c.Admins.Create)))
 	mux.Handle("GET /v2/admin/admins/{id}", adminGlobalMW(http.HandlerFunc(c.Admins.Get)))
@@ -51,6 +55,10 @@ func RegisterAdminRoutes(mux *http.ServeMux, deps AdminRouterDeps) {
 	mux.Handle("DELETE /v2/admin/admins/{id}", adminGlobalMW(http.HandlerFunc(c.Admins.Delete)))
 	mux.Handle("POST /v2/admin/admins/{id}/disable", adminGlobalMW(http.HandlerFunc(c.Admins.Disable)))
 	mux.Handle("POST /v2/admin/admins/{id}/enable", adminGlobalMW(http.HandlerFunc(c.Admins.Enable)))
+	mux.Handle("GET /v2/admin/system/email", adminGlobalAPIKeyMW(http.HandlerFunc(c.SystemEmail.Get)))
+	mux.Handle("PUT /v2/admin/system/email", adminGlobalAPIKeyMW(http.HandlerFunc(c.SystemEmail.Put)))
+	mux.Handle("DELETE /v2/admin/system/email", adminGlobalAPIKeyMW(http.HandlerFunc(c.SystemEmail.Delete)))
+	mux.Handle("POST /v2/admin/system/email/test", adminGlobalAPIKeyMW(http.HandlerFunc(c.SystemEmail.Test)))
 
 	// â”€â”€â”€ Admin Tenants (Control Plane - System Admin) â”€â”€â”€
 	// NOTA: Estas rutas NO son tenant-scoped porque gestionan la lista de tenants
@@ -971,7 +979,10 @@ func adminGlobalChain(issuer *jwtx.Issuer, limiter mw.RateLimiter, apiKeyRepo re
 	}
 
 	if issuer != nil {
-		chain = append(chain, mw.RequireAdminAuthOrAPIKey(issuer, apiKeyRepo))
+		chain = append(chain,
+			mw.RequireAdminAuthOrAPIKey(issuer, apiKeyRepo),
+			mw.RequireGlobalAdmin(),
+		)
 	}
 
 	if limiter != nil {

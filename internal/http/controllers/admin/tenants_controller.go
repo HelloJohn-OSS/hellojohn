@@ -468,21 +468,18 @@ func (c *TenantsController) TestMailing(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Parse request body for recipient email
-	var req struct {
-		To string `json:"to"`
-	}
+	var req dto.SendTestEmailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httperrors.WriteError(w, httperrors.ErrInvalidJSON)
 		return
 	}
 
-	if req.To == "" {
+	if strings.TrimSpace(req.To) == "" {
 		httperrors.WriteError(w, httperrors.ErrBadRequest.WithDetail("recipient email required"))
 		return
 	}
 
-	if err := c.service.TestMailing(ctx, slugOrID, req.To); err != nil {
+	if err := c.service.TestMailing(ctx, slugOrID, req); err != nil {
 		log.Error("test mailing failed", logger.Err(err))
 		httperrors.WriteError(w, mapTenantError(err))
 		return

@@ -20,8 +20,28 @@ func TestFilterTenantsByAdminClaims(t *testing.T) {
 		}
 	})
 
-	t.Run("global admin sees all", func(t *testing.T) {
+	t.Run("global admin without assignments sees none", func(t *testing.T) {
 		filtered := filterTenantsByAdminClaims(source, &jwt.AdminAccessClaims{AdminType: "global"})
+		if len(filtered) != 0 {
+			t.Fatalf("expected 0 tenants, got %d", len(filtered))
+		}
+	})
+
+	t.Run("global admin with explicit assignments is filtered", func(t *testing.T) {
+		filtered := filterTenantsByAdminClaims(source, &jwt.AdminAccessClaims{
+			AdminType: "global",
+			Tenants:   []jwt.TenantAccessClaim{{Slug: "acme", Role: "owner"}},
+		})
+		if len(filtered) != 1 || filtered[0].Slug != "acme" {
+			t.Fatalf("expected only acme tenant, got %+v", filtered)
+		}
+	})
+
+	t.Run("wildcard assignment sees all", func(t *testing.T) {
+		filtered := filterTenantsByAdminClaims(source, &jwt.AdminAccessClaims{
+			AdminType: "global",
+			Tenants:   []jwt.TenantAccessClaim{{Slug: "*", Role: "owner"}},
+		})
 		if len(filtered) != len(source) {
 			t.Fatalf("expected %d tenants, got %d", len(source), len(filtered))
 		}

@@ -21,6 +21,9 @@ import (
 	cp "github.com/dropDatabas3/hellojohn/internal/controlplane"
 	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
 	emailv2 "github.com/dropDatabas3/hellojohn/internal/email"
+	_ "github.com/dropDatabas3/hellojohn/internal/email/providers/mailgun"
+	_ "github.com/dropDatabas3/hellojohn/internal/email/providers/resend"
+	_ "github.com/dropDatabas3/hellojohn/internal/email/providers/sendgrid"
 	cloudctrl "github.com/dropDatabas3/hellojohn/internal/http/controllers/cloud"
 	sysctrl "github.com/dropDatabas3/hellojohn/internal/http/controllers/system"
 	mw "github.com/dropDatabas3/hellojohn/internal/http/middlewares"
@@ -31,7 +34,9 @@ import (
 	syssvc "github.com/dropDatabas3/hellojohn/internal/http/services/system"
 	jwtx "github.com/dropDatabas3/hellojohn/internal/jwt"
 	metrics "github.com/dropDatabas3/hellojohn/internal/metrics"
+	pwd "github.com/dropDatabas3/hellojohn/internal/security/password"
 	store "github.com/dropDatabas3/hellojohn/internal/store"
+	pg "github.com/dropDatabas3/hellojohn/internal/store/adapters/pg"
 	"github.com/dropDatabas3/hellojohn/internal/webhook"
 	migrations "github.com/dropDatabas3/hellojohn/migrations/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,23 +73,35 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 	// Construir GlobalDB config si se provee GLOBAL_CONTROL_PLANE_DSN
 	var globalDB *store.DBConfig
 	if globalCfg.GlobalControlPlaneDSN != "" {
+		// Normalize driver alias: "pg" and "" both map to the registered adapter name "postgres".
+		driver := globalCfg.GlobalControlPlaneDriver
+		if driver == "" || driver == "pg" {
+			driver = "postgres"
+		}
 		globalDB = &store.DBConfig{
-			Driver: globalCfg.GlobalControlPlaneDriver,
+			Driver: driver,
 			DSN:    globalCfg.GlobalControlPlaneDSN,
 		}
 	}
 
-	// 2.1 Global Pool — used for system-level DB checks and lifecycle management.
-	// OSS build keeps usage/ETL repositories disabled.
+	// 2.1 Global Pool — pool de pgx directo para repos de usage + ETL (solo PG).
+	// Separado del pool interno del manager para no interferir con sus migraciones.
 	var globalPool *pgxpool.Pool
 	var usageRepo repository.UsageRepository
 	var migJobRepo repository.MigrationJobRepository
 	if globalCfg.GlobalControlPlaneDSN != "" && (globalCfg.GlobalControlPlaneDriver == "" || globalCfg.GlobalControlPlaneDriver == "postgres" || globalCfg.GlobalControlPlaneDriver == "pg") {
-		if poolCfg, err := pgxpool.ParseConfig(globalCfg.GlobalControlPlaneDSN); err == nil {
-			if pool, err2 := pgxpool.NewWithConfig(ctx, poolCfg); err2 == nil {
-				globalPool = pool
-			}
+		log.Printf("[wiring] GLOBAL_CONTROL_PLANE_DSN set — connecting to global pool...")
+		if poolCfg, err := pgxpool.ParseConfig(globalCfg.GlobalControlPlaneDSN); err != nil {
+			log.Printf("[wiring] ERROR: failed to parse GLOBAL_CONTROL_PLANE_DSN: %v — billing/onboard/tunnel routes will be UNAVAILABLE", err)
+		} else if pool, err2 := pgxpool.NewWithConfig(ctx, poolCfg); err2 != nil {
+			log.Printf("[wiring] ERROR: failed to connect global pool: %v — billing/onboard/tunnel routes will be UNAVAILABLE", err2)
+		} else {
+			globalPool = pool
+			migJobRepo = pg.NewMigrationJobRepo(globalPool)
+			log.Printf("[wiring] global pool connected OK — billing/onboard/tunnel routes ACTIVE")
 		}
+	} else if globalCfg.GlobalControlPlaneDSN == "" {
+		log.Printf("[wiring] GLOBAL_CONTROL_PLANE_DSN not set — billing/onboard/tunnel routes will be UNAVAILABLE (set GLOBAL_CONTROL_PLANE_DSN to enable)")
 	}
 
 	// SA.1: Determinar migraciones de Global DB según el driver
@@ -135,6 +152,16 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to init store manager: %w", err)
+	}
+
+	// 2.2 Admin seed — si ADMIN_SEED_EMAIL y ADMIN_SEED_PASSWORD están seteados
+	// y cp_admin está vacía, crea el primer admin automáticamente.
+	// Es idempotente: no hace nada si ya hay admins. Seguro para producción.
+	// El store.NewManager ya corrió las migraciones, así que cp_admin existe.
+	if globalPool != nil && globalCfg.AdminSeedEmail != "" && globalCfg.AdminSeedPassword != "" {
+		if seedErr := seedFirstAdmin(ctx, globalPool, globalCfg.AdminSeedEmail, globalCfg.AdminSeedPassword); seedErr != nil {
+			log.Printf("[wiring] WARN: admin seed failed: %v", seedErr)
+		}
 	}
 
 	// Cleanup for store
@@ -194,33 +221,42 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 		return nil, nil, nil, err
 	}
 
-	emailService, err := emailv2.NewService(emailv2.ServiceConfig{
-		DAL:       manager,
-		MasterKey: emailKey,
-		BaseURL:   globalCfg.BaseURL,
-		VerifyTTL: 48 * time.Hour,
-		ResetTTL:  1 * time.Hour,
-		SystemSMTP: emailv2.SystemSMTPConfig{
-			Host:     globalCfg.SystemSMTP.Host,
-			Port:     globalCfg.SystemSMTP.Port,
-			User:     globalCfg.SystemSMTP.User,
-			Password: globalCfg.SystemSMTP.Password,
-			From:     globalCfg.SystemSMTP.From,
+	systemEmailCfg := emailv2.SystemEmailConfig{
+		Provider:       globalCfg.SystemEmail.Provider,
+		FromEmail:      globalCfg.SystemEmail.FromEmail,
+		ReplyTo:        globalCfg.SystemEmail.ReplyTo,
+		TimeoutMs:      globalCfg.SystemEmail.TimeoutMs,
+		ResendAPIKey:   globalCfg.SystemEmail.ResendAPIKey,
+		SendGridAPIKey: globalCfg.SystemEmail.SendGridAPIKey,
+		SendGridDomain: globalCfg.SystemEmail.SendGridDomain,
+		MailgunAPIKey:  globalCfg.SystemEmail.MailgunAPIKey,
+		MailgunDomain:  globalCfg.SystemEmail.MailgunDomain,
+		MailgunRegion:  globalCfg.SystemEmail.MailgunRegion,
+		SMTP: emailv2.SystemSMTPConfig{
+			Host:     globalCfg.SystemEmail.SMTP.Host,
+			Port:     globalCfg.SystemEmail.SMTP.Port,
+			User:     globalCfg.SystemEmail.SMTP.User,
+			Password: globalCfg.SystemEmail.SMTP.Password,
+			From:     globalCfg.SystemEmail.SMTP.From,
 		},
+	}
+
+	emailService, err := emailv2.NewService(emailv2.ServiceConfig{
+		DAL:            manager,
+		MasterKey:      emailKey,
+		BaseURL:        globalCfg.BaseURL,
+		VerifyTTL:      48 * time.Hour,
+		ResetTTL:       1 * time.Hour,
+		SystemEmail:    systemEmailCfg,
+		SystemSettings: manager.ConfigAccess().SystemSettings(),
 	})
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("email v2 init failed: %w", err)
 	}
 
-	// System Email Service (usa SMTP global para invites de admin)
-	systemEmailService := emailv2.NewSystemEmailService(emailv2.SystemSMTPConfig{
-		Host:     globalCfg.SystemSMTP.Host,
-		Port:     globalCfg.SystemSMTP.Port,
-		User:     globalCfg.SystemSMTP.User,
-		Password: globalCfg.SystemSMTP.Password,
-		From:     globalCfg.SystemSMTP.From,
-	})
+	// System Email Service (usa Global Provider del control plane + fallback env)
+	systemEmailService := emailv2.NewSystemEmailServiceWithSources(systemEmailCfg, emailKey, manager.ConfigAccess().SystemSettings())
 
 	// 5.5 Bot Protection Service
 	var botSvc bot.BotProtectionService
@@ -342,19 +378,31 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 			globalCfg.RateLimitMax, globalCfg.RateLimitWindow)
 	}
 
+	// Dedicated limiter for tenant test mailing endpoint:
+	// max 5 requests/minute per tenant.
+	mailingTestLimiter := mw.NewMemoryRateLimiter(5, time.Minute)
+	prevCleanup := cleanup
+	cleanup = func() error {
+		mailingTestLimiter.Stop()
+		return prevCleanup()
+	}
+	log.Printf(`{"level":"info","msg":"tenant_mailing_test_rate_limiter_enabled","max":5,"window":"1m"}`)
+
 	// 8. Dependencies Struct
 	deps := appv2.Deps{
-		DAL:          manager,
-		ControlPlane: cpService,
-		Email:        emailService,
-		SystemEmail:  systemEmailService,
-		Issuer:       issuer,
-		JWKSCache:    jwksCache,
-		BaseIssuer:   globalCfg.BaseURL,
-		RefreshTTL:   globalCfg.RefreshTTL,
-		SocialCache:  socialCacheAdapter,
-		MasterKey:    masterKey,
-		RateLimiter:  rateLimiter,
+		DAL:                    manager,
+		ControlPlane:           cpService,
+		Email:                  emailService,
+		SystemEmail:            systemEmailService,
+		SystemEmailEnv:         systemEmailCfg,
+		Issuer:                 issuer,
+		JWKSCache:              jwksCache,
+		BaseIssuer:             globalCfg.BaseURL,
+		RefreshTTL:             globalCfg.RefreshTTL,
+		SocialCache:            socialCacheAdapter,
+		MasterKey:              masterKey,
+		RateLimiter:            rateLimiter,
+		MailingTestRateLimiter: mailingTestLimiter,
 		// Auth Config
 		AutoLogin:      globalCfg.AutoLogin,
 		FSAdminEnabled: globalCfg.FSAdminEnabled,
@@ -514,7 +562,15 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 		proxy:            proxyForCloud,
 	})
 
-	handler := metrics.NewMiddleware(metricsCollector)(layerCloudRoutes(cloudMux, app.Handler))
+	cloudHandler := http.Handler(cloudMux)
+	cloudHandler = mw.WithRecover()(cloudHandler)
+	cloudHandler = mw.WithRequestID()(cloudHandler)
+	cloudHandler = mw.WithLogging()(cloudHandler)
+	if len(globalCfg.CORSOrigins) > 0 {
+		cloudHandler = mw.WithCORS(globalCfg.CORSOrigins)(cloudHandler)
+	}
+
+	handler := metrics.NewMiddleware(metricsCollector)(layerCloudRoutes(cloudMux, cloudHandler, app.Handler))
 	return handler, cleanup, manager, nil
 }
 
@@ -585,11 +641,11 @@ type cloudDeps struct {
 // En el build OSS cloudMux no tiene rutas registradas, por lo que todas las
 // peticiones caen al handler principal. En el build cloud, las rutas registradas
 // en cloudMux tienen prioridad.
-func layerCloudRoutes(cloud *http.ServeMux, primary http.Handler) http.Handler {
+func layerCloudRoutes(cloud *http.ServeMux, cloudHandler http.Handler, primary http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, pattern := cloud.Handler(r)
 		if pattern != "" {
-			cloud.ServeHTTP(w, r)
+			cloudHandler.ServeHTTP(w, r)
 			return
 		}
 		primary.ServeHTTP(w, r)
@@ -888,4 +944,33 @@ func (m *MockMFARepo) AddTrustedDevice(ctx context.Context, userID, deviceHash s
 }
 func (m *MockMFARepo) IsTrustedDevice(ctx context.Context, userID, deviceHash string) (bool, error) {
 	return false, nil
+}
+
+// ─── Admin Bootstrap ───
+
+// seedFirstAdmin inserts the first super-admin into cp_admin when the table is
+// empty. It is safe to call on every startup: it's a no-op once any admin exists.
+// Activated by ADMIN_SEED_EMAIL + ADMIN_SEED_PASSWORD env vars (dev only).
+func seedFirstAdmin(ctx context.Context, pool *pgxpool.Pool, email, password string) error {
+	var count int
+	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM cp_admin").Scan(&count); err != nil {
+		return fmt.Errorf("count cp_admin: %w", err)
+	}
+	if count > 0 {
+		log.Printf("[wiring] admin seed skipped — cp_admin already has %d admin(s)", count)
+		return nil
+	}
+	hash, err := pwd.Hash(pwd.Default, password)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	_, err = pool.Exec(ctx,
+		`INSERT INTO cp_admin (email, password_hash, name, role) VALUES ($1, $2, $3, 'global')`,
+		email, hash, email,
+	)
+	if err != nil {
+		return fmt.Errorf("insert admin: %w", err)
+	}
+	log.Printf("[wiring] 🌱 First admin seeded: %s", email)
+	return nil
 }

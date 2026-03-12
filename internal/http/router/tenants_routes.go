@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
 	mw "github.com/dropDatabas3/hellojohn/internal/http/middlewares"
@@ -19,6 +20,13 @@ func RegisterTenantAdminRoutes(mux *http.ServeMux, deps AdminRouterDeps) {
 	c := deps.Controllers.Tenants
 	collectionChain := sysAdminBaseChain(deps.Issuer, deps.RateLimiter, deps.AdminConfig, deps.APIKeyRepo)
 	tenantChain := adminBaseChain(deps.DAL, deps.Issuer, deps.RateLimiter, deps.APIKeyRepo, false)
+	mailingTestChain := append([]mw.Middleware{}, tenantChain...)
+	if deps.MailingTestRateLimiter != nil {
+		mailingTestChain = append(mailingTestChain, mw.WithRateLimit(mw.RateLimitConfig{
+			Limiter: deps.MailingTestRateLimiter,
+			KeyFunc: tenantMailingRateKey,
+		}))
+	}
 
 	wrapCollection := func(h http.HandlerFunc) http.Handler {
 		return mw.Chain(h, collectionChain...)
@@ -26,6 +34,10 @@ func RegisterTenantAdminRoutes(mux *http.ServeMux, deps AdminRouterDeps) {
 
 	wrapTenant := func(h http.HandlerFunc) http.Handler {
 		return mw.Chain(h, tenantChain...)
+	}
+
+	wrapTenantMailingTest := func(h http.HandlerFunc) http.Handler {
+		return mw.Chain(h, mailingTestChain...)
 	}
 
 	// Collection
@@ -56,7 +68,7 @@ func RegisterTenantAdminRoutes(mux *http.ServeMux, deps AdminRouterDeps) {
 	// Infra
 	mux.Handle("GET /v2/admin/tenants/{tenant_id}/infra-stats", wrapTenant(c.InfraStats))
 	mux.Handle("POST /v2/admin/tenants/{tenant_id}/cache/test-connection", wrapTenant(c.TestCache))
-	mux.Handle("POST /v2/admin/tenants/{tenant_id}/mailing/test", wrapTenant(c.TestMailing))
+	mux.Handle("POST /v2/admin/tenants/{tenant_id}/mailing/test", wrapTenantMailingTest(c.TestMailing))
 	mux.Handle("POST /v2/admin/tenants/{tenant_id}/user-store/test-connection", wrapTenant(c.TestTenantDBConnection))
 
 	// Import/Export
@@ -69,6 +81,24 @@ func RegisterTenantAdminRoutes(mux *http.ServeMux, deps AdminRouterDeps) {
 
 	// Push: server-to-server tenant replication (browser never sees secrets)
 	mux.Handle("POST /v2/admin/tenants/{tenant_id}/push", wrapTenant(c.PushTenant))
+}
+
+func tenantMailingRateKey(r *http.Request) string {
+	if tda := mw.GetTenant(r.Context()); tda != nil {
+		// Use canonical tenant identity injected by middleware to avoid slug/UUID bypasses.
+		if canonicalID := strings.TrimSpace(strings.ToLower(tda.ID())); canonicalID != "" {
+			return "tenant:" + canonicalID
+		}
+		if canonicalSlug := strings.TrimSpace(strings.ToLower(tda.Slug())); canonicalSlug != "" {
+			return "tenant:" + canonicalSlug
+		}
+	}
+
+	tenantID := strings.TrimSpace(strings.ToLower(r.PathValue("tenant_id")))
+	if tenantID == "" {
+		return "tenant:-"
+	}
+	return "tenant:" + tenantID
 }
 
 // sysAdminBaseChain es similar a adminBaseChain pero SIN TenantResolution,

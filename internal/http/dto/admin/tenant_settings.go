@@ -17,11 +17,12 @@ type TenantSettingsResponse struct {
 	SocialLoginEnabled bool `json:"socialLoginEnabled"`
 
 	// Infrastructure Settings
-	UserDB   *UserDBSettings   `json:"userDb,omitempty"`
-	SMTP     *SMTPSettings     `json:"smtp,omitempty"`
-	Cache    *CacheSettings    `json:"cache,omitempty"`
-	Security *SecuritySettings `json:"security,omitempty"`
-	Mailing  *MailingSettings  `json:"mailing,omitempty"`
+	UserDB        *UserDBSettings              `json:"userDb,omitempty"`
+	SMTP          *SMTPSettings                `json:"smtp,omitempty"`
+	EmailProvider *TenantEmailProviderResponse `json:"emailProvider,omitempty"`
+	Cache         *CacheSettings               `json:"cache,omitempty"`
+	Security      *SecuritySettings            `json:"security,omitempty"`
+	Mailing       *MailingSettings             `json:"mailing,omitempty"`
 
 	// Branding
 	LogoURL        string `json:"logoUrl,omitempty"`
@@ -68,6 +69,38 @@ type SMTPSettings struct {
 	PasswordEnc string `json:"passwordEnc,omitempty"` // Encrypted password (in responses)
 	FromEmail   string `json:"fromEmail"`
 	UseTLS      bool   `json:"useTLS"`
+}
+
+// TenantEmailProviderRequest defines write-only tenant email provider payload.
+type TenantEmailProviderRequest struct {
+	Provider  string `json:"provider"`
+	FromEmail string `json:"fromEmail"`
+	ReplyTo   string `json:"replyTo,omitempty"`
+	TimeoutMs int    `json:"timeoutMs,omitempty"`
+
+	APIKey       string `json:"apiKey,omitempty"` // write-only
+	Domain       string `json:"domain,omitempty"`
+	Region       string `json:"region,omitempty"`
+	SMTPHost     string `json:"smtpHost,omitempty"`
+	SMTPPort     int    `json:"smtpPort,omitempty"`
+	SMTPUsername string `json:"smtpUsername,omitempty"`
+	SMTPPassword string `json:"smtpPassword,omitempty"` // write-only
+	SMTPUseTLS   bool   `json:"smtpUseTLS,omitempty"`
+}
+
+// TenantEmailProviderResponse masks secret fields and only exposes configured flags.
+type TenantEmailProviderResponse struct {
+	Provider         string `json:"provider"`
+	FromEmail        string `json:"fromEmail"`
+	ReplyTo          string `json:"replyTo,omitempty"`
+	TimeoutMs        int    `json:"timeoutMs,omitempty"`
+	Domain           string `json:"domain,omitempty"`
+	Region           string `json:"region,omitempty"`
+	SMTPHost         string `json:"smtpHost,omitempty"`
+	SMTPPort         int    `json:"smtpPort,omitempty"`
+	SMTPUsername     string `json:"smtpUsername,omitempty"`
+	SMTPUseTLS       bool   `json:"smtpUseTLS,omitempty"`
+	APIKeyConfigured bool   `json:"apiKeyConfigured"`
 }
 
 // CacheSettings configures caching for the tenant.
@@ -196,11 +229,12 @@ type UpdateTenantSettingsRequest struct {
 	SocialLoginEnabled *bool `json:"socialLoginEnabled,omitempty"`
 
 	// Infrastructure Settings
-	UserDB   *UserDBSettings   `json:"userDb,omitempty"`
-	SMTP     *SMTPSettings     `json:"smtp,omitempty"`
-	Cache    *CacheSettings    `json:"cache,omitempty"`
-	Security *SecuritySettings `json:"security,omitempty"`
-	Mailing  *MailingSettings  `json:"mailing,omitempty"`
+	UserDB        *UserDBSettings             `json:"userDb,omitempty"`
+	SMTP          *SMTPSettings               `json:"smtp,omitempty"`
+	EmailProvider *TenantEmailProviderRequest `json:"emailProvider,omitempty"`
+	Cache         *CacheSettings              `json:"cache,omitempty"`
+	Security      *SecuritySettings           `json:"security,omitempty"`
+	Mailing       *MailingSettings            `json:"mailing,omitempty"`
 
 	// Branding
 	LogoURL        *string `json:"logoUrl,omitempty"`
@@ -248,10 +282,10 @@ type PasswordlessSettings struct {
 // The secret key is write-only: plain value accepted in requests, encrypted stored in responses.
 type BotProtectionSettings struct {
 	Enabled              bool   `json:"enabled"`
-	Provider             string `json:"provider,omitempty"`             // "turnstile" (only supported)
-	TurnstileSiteKey     string `json:"turnstileSiteKey,omitempty"`     // Public site key
-	TurnstileSecretKey   string `json:"turnstileSecretKey,omitempty"`   // Plain (only in requests, never returned)
-	TurnstileSecretEnc   string `json:"turnstileSecretEnc,omitempty"`   // Encrypted (in responses)
+	Provider             string `json:"provider,omitempty"`           // "turnstile" (only supported)
+	TurnstileSiteKey     string `json:"turnstileSiteKey,omitempty"`   // Public site key
+	TurnstileSecretKey   string `json:"turnstileSecretKey,omitempty"` // Plain (only in requests, never returned)
+	TurnstileSecretEnc   string `json:"turnstileSecretEnc,omitempty"` // Encrypted (in responses)
 	ProtectLogin         bool   `json:"protectLogin"`
 	ProtectRegistration  bool   `json:"protectRegistration"`
 	ProtectPasswordReset bool   `json:"protectPasswordReset"`

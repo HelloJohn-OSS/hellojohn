@@ -149,6 +149,9 @@ func (c *mysqlConnection) WebAuthn() repository.WebAuthnRepository {
 func (c *mysqlConnection) Tenants() repository.TenantRepository {
 	return &cpTenantRepoMySQL{db: c.db}
 }
+func (c *mysqlConnection) SystemSettings() repository.SystemSettingsRepository {
+	return &mysqlSystemSettingsRepo{db: c.db}
+}
 
 func (c *mysqlConnection) Admins() repository.AdminRepository {
 	return &cpAdminRepoMySQL{db: c.db}

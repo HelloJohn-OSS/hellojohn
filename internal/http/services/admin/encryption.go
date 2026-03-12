@@ -24,6 +24,26 @@ func encryptTenantSecrets(s *repository.TenantSettings, masterKeyHex string) err
 		s.SMTP.Password = "" // Clear plain
 	}
 
+	// EmailProvider
+	if s.EmailProvider != nil {
+		if s.EmailProvider.APIKey != "" {
+			enc, err := secretbox.Encrypt(s.EmailProvider.APIKey)
+			if err != nil {
+				return err
+			}
+			s.EmailProvider.APIKeyEnc = enc
+			s.EmailProvider.APIKey = ""
+		}
+		if s.EmailProvider.SMTPPassword != "" {
+			enc, err := secretbox.Encrypt(s.EmailProvider.SMTPPassword)
+			if err != nil {
+				return err
+			}
+			s.EmailProvider.SMTPPasswordEnc = enc
+			s.EmailProvider.SMTPPassword = ""
+		}
+	}
+
 	// UserDB
 	if s.UserDB != nil && s.UserDB.DSN != "" {
 		enc, err := secretbox.Encrypt(s.UserDB.DSN)

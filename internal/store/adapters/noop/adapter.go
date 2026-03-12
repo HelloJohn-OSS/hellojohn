@@ -46,6 +46,7 @@ func (c *noopConnection) APIKeys() repository.APIKeyRepository                  
 func (c *noopConnection) CloudUsers() repository.CloudUserRepository                 { return nil }
 func (c *noopConnection) CloudInstances() repository.CloudInstanceRepository         { return nil }
 func (c *noopConnection) Tenants() repository.TenantRepository                       { return nil }
+func (c *noopConnection) SystemSettings() repository.SystemSettingsRepository        { return nil }
 func (c *noopConnection) Admins() repository.AdminRepository                         { return nil }
 func (c *noopConnection) AdminRefreshTokens() repository.AdminRefreshTokenRepository { return nil }
 func (c *noopConnection) EmailTokens() repository.EmailTokenRepository               { return &noopEmailTokenRepo{} }

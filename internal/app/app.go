@@ -40,18 +40,21 @@ type Config struct {
 
 // Deps holds raw dependencies required to build the app (DAL, Clients, etc).
 type Deps struct {
-	DAL          store.DataAccessLayer
-	ControlPlane cp.Service
-	Email        emailv2.Service
-	SystemEmail  emailv2.SystemEmailService // SMTP global para invites de admin (opcional)
-	Issuer       *jwtx.Issuer
-	JWKSCache    *jwtx.JWKSCache
-	BaseIssuer   string
-	RefreshTTL   time.Duration
-	SocialCache  socialsvc.CacheWriter
-	MasterKey    string
-	RateLimiter  mw.RateLimiter
-	Social       socialsvc.Services
+	DAL            store.DataAccessLayer
+	ControlPlane   cp.Service
+	Email          emailv2.Service
+	SystemEmail    emailv2.SystemEmailService // SMTP global para invites de admin (opcional)
+	SystemEmailEnv emailv2.SystemEmailConfig
+	Issuer         *jwtx.Issuer
+	JWKSCache      *jwtx.JWKSCache
+	BaseIssuer     string
+	RefreshTTL     time.Duration
+	SocialCache    socialsvc.CacheWriter
+	MasterKey      string
+	RateLimiter    mw.RateLimiter
+	// Dedicated limiter for POST /v2/admin/tenants/{tenant_id}/mailing/test (max 5/min per tenant).
+	MailingTestRateLimiter mw.RateLimiter
+	Social                 socialsvc.Services
 
 	// ─── Auth Config ───
 	AutoLogin      bool
@@ -149,17 +152,18 @@ type App struct {
 func New(cfg Config, deps Deps) (*App, error) {
 	// 1. Build Services
 	svcs := services.New(services.Deps{
-		DAL:          deps.DAL,
-		ControlPlane: deps.ControlPlane,
-		Email:        deps.Email,
-		SystemEmail:  deps.SystemEmail,
-		MasterKey:    deps.MasterKey,
-		Issuer:       deps.Issuer,
-		JWKSCache:    deps.JWKSCache,
-		BaseIssuer:   deps.BaseIssuer,
-		RefreshTTL:   deps.RefreshTTL,
-		SocialCache:  deps.SocialCache,
-		Social:       deps.Social,
+		DAL:            deps.DAL,
+		ControlPlane:   deps.ControlPlane,
+		Email:          deps.Email,
+		SystemEmail:    deps.SystemEmail,
+		SystemEmailEnv: deps.SystemEmailEnv,
+		MasterKey:      deps.MasterKey,
+		Issuer:         deps.Issuer,
+		JWKSCache:      deps.JWKSCache,
+		BaseIssuer:     deps.BaseIssuer,
+		RefreshTTL:     deps.RefreshTTL,
+		SocialCache:    deps.SocialCache,
+		Social:         deps.Social,
 		// Auth Config
 		AutoLogin:      deps.AutoLogin,
 		FSAdminEnabled: deps.FSAdminEnabled,
@@ -263,22 +267,23 @@ func New(cfg Config, deps Deps) (*App, error) {
 	// 3. Register Routes
 	mux := http.NewServeMux()
 	router.RegisterV2Routes(router.V2RouterDeps{
-		Mux:                 mux,
-		DAL:                 deps.DAL,
-		Issuer:              deps.Issuer,
-		AuthControllers:     authControllers,
-		AdminControllers:    adminControllers,
-		OAuthControllers:    oauthControllers,
-		OIDCControllers:     oidcControllers,
-		SocialControllers:   socialControllers,
-		SessionControllers:  sessionControllers,
-		EmailControllers:    emailControllers,
-		SecurityControllers: securityControllers,
-		HealthControllers:   healthControllers,
-		SystemControllers:   deps.SystemControllers, // SA.2
-		CloudControllers:    deps.CloudControllers,  // Cloud Control Plane
-		RateLimiter:         deps.RateLimiter,
-		AuthMiddleware:      mw.RequireAuth(deps.Issuer),
+		Mux:                    mux,
+		DAL:                    deps.DAL,
+		Issuer:                 deps.Issuer,
+		AuthControllers:        authControllers,
+		AdminControllers:       adminControllers,
+		OAuthControllers:       oauthControllers,
+		OIDCControllers:        oidcControllers,
+		SocialControllers:      socialControllers,
+		SessionControllers:     sessionControllers,
+		EmailControllers:       emailControllers,
+		SecurityControllers:    securityControllers,
+		HealthControllers:      healthControllers,
+		SystemControllers:      deps.SystemControllers, // SA.2
+		CloudControllers:       deps.CloudControllers,  // Cloud Control Plane
+		RateLimiter:            deps.RateLimiter,
+		MailingTestRateLimiter: deps.MailingTestRateLimiter,
+		AuthMiddleware:         mw.RequireAuth(deps.Issuer),
 		AdminConfig: mw.AdminConfig{
 			EnforceAdmin: deps.AdminEnforce,
 			AdminSubs:    deps.AdminSubs,

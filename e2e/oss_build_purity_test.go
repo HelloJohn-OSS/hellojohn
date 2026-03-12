@@ -47,6 +47,12 @@ func TestCloudBuildIncludes(t *testing.T) {
 		"internal/billing",
 	}
 
+	// En repositorios OSS puros, estos paquetes pueden no existir.
+	// En ese caso, el check cloud-only no aplica.
+	if err := exec.Command("go", "list", "-tags", "cloud", "github.com/dropDatabas3/hellojohn/internal/billing").Run(); err != nil {
+		t.Skipf("cloud-only packages not available in this repository: %v", err)
+	}
+
 	// go list -deps con tags cloud, usando import path completo
 	cmd := exec.Command("go", "list", "-tags", "cloud", "-deps", "github.com/dropDatabas3/hellojohn/cmd/service")
 	output, err := cmd.Output()

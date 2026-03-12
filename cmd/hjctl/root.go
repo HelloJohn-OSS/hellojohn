@@ -96,7 +96,7 @@ func init() {
 	getBaseURL := func() (string, error) { return requireBaseURL() }
 	rootCmd.AddCommand(commands.NewSystemCmd(getClient, outputFmt, getBaseURL, func() int { return flagTimeout }))
 	rootCmd.AddCommand(commands.NewProviderCmd())
-	rootCmd.AddCommand(commands.NewMailCmd())
+	rootCmd.AddCommand(commands.NewMailCmd(getClient, outputFmt))
 	rootCmd.AddCommand(commands.NewOIDCCmd())
 	rootCmd.AddCommand(commands.NewWebhookCmd(getClient, outputFmt, getTenant))
 	rootCmd.AddCommand(commands.NewSessionCmd(getClient, outputFmt, getTenant))

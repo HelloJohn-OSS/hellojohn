@@ -121,7 +121,7 @@ func (s *passwordlessService) SendMagicLink(ctx context.Context, req MagicLinkRe
 	htmlBody := magicLinkHTMLBody(linkURL, cfg.TTLSeconds)
 	textBody := magicLinkTextBody(linkURL, cfg.TTLSeconds)
 
-	if err := sender.Send(req.Email, subject, htmlBody, textBody); err != nil {
+	if err := sender.Send(ctx, req.Email, subject, htmlBody, textBody); err != nil {
 		log.Error("failed to send magic link email", logger.Err(err))
 		return fmt.Errorf("failed to send magic link email: %w", err)
 	}
@@ -373,7 +373,7 @@ func (s *passwordlessService) SendOTPEmail(ctx context.Context, req OTPRequest) 
 	htmlBody := otpHTMLBody(rawCode, cfg.TTLSeconds)
 	textBody := otpTextBody(rawCode, cfg.TTLSeconds)
 
-	if err := sender.Send(req.Email, subject, htmlBody, textBody); err != nil {
+	if err := sender.Send(ctx, req.Email, subject, htmlBody, textBody); err != nil {
 		log.Error("failed to send OTP email", logger.Err(err))
 		return fmt.Errorf("failed to send OTP email: %w", err)
 	}

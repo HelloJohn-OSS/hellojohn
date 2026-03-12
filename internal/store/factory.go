@@ -593,6 +593,20 @@ func (c *factoryConfigAccess) Tenants() repository.TenantRepository {
 	return c.primary.Tenants()
 }
 
+func (c *factoryConfigAccess) SystemSettings() repository.SystemSettingsRepository {
+	// En modo DB-primary, usar DB como fuente de verdad.
+	if c.primary != nil {
+		if repo := c.primary.SystemSettings(); repo != nil {
+			return repo
+		}
+	}
+	// Fallback a FS en modo solo-FS o cuando DB no implementa el repo.
+	if c.cache != nil {
+		return c.cache.SystemSettings()
+	}
+	return nil
+}
+
 func (c *factoryConfigAccess) Clients(tenantSlug string) repository.ClientRepository {
 	if c.cache != nil {
 		// Modo DB-primary: resolver slug → ID desde primary y delegar al cpClientRepo

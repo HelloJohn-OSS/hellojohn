@@ -120,6 +120,7 @@ func (c *pgSharedBaseConn) WebAuthn() repository.WebAuthnRepository {
 
 // Control Plane repos — not implemented in pg_shared (FS adapter handles these).
 func (c *pgSharedBaseConn) Tenants() repository.TenantRepository                       { return nil }
+func (c *pgSharedBaseConn) SystemSettings() repository.SystemSettingsRepository        { return nil }
 func (c *pgSharedBaseConn) Admins() repository.AdminRepository                         { return nil }
 func (c *pgSharedBaseConn) AdminRefreshTokens() repository.AdminRefreshTokenRepository { return nil }
 func (c *pgSharedBaseConn) Keys() repository.KeyRepository                             { return nil }
@@ -183,6 +184,7 @@ func (c *pgSharedTenantConn) WebAuthn() repository.WebAuthnRepository {
 
 // Control Plane repos — not implemented.
 func (c *pgSharedTenantConn) Tenants() repository.TenantRepository                       { return nil }
+func (c *pgSharedTenantConn) SystemSettings() repository.SystemSettingsRepository        { return nil }
 func (c *pgSharedTenantConn) Admins() repository.AdminRepository                         { return nil }
 func (c *pgSharedTenantConn) AdminRefreshTokens() repository.AdminRefreshTokenRepository { return nil }
 func (c *pgSharedTenantConn) Keys() repository.KeyRepository                             { return nil }

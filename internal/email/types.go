@@ -80,3 +80,68 @@ type UnblockedVars struct {
 	UserEmail string
 	Tenant    string
 }
+
+// Multi-provider model
+
+// ProviderKind identifica el tipo de proveedor de email.
+type ProviderKind string
+
+const (
+	ProviderKindSMTP     ProviderKind = "smtp"
+	ProviderKindResend   ProviderKind = "resend"
+	ProviderKindSendGrid ProviderKind = "sendgrid"
+	ProviderKindMailgun  ProviderKind = "mailgun"
+)
+
+// EmailProviderConfig es la configuraciÃ³n unificada para enviar email.
+type EmailProviderConfig struct {
+	Provider  ProviderKind `json:"provider" yaml:"provider"`
+	FromEmail string       `json:"fromEmail" yaml:"fromEmail"`
+	ReplyTo   string       `json:"replyTo,omitempty" yaml:"replyTo,omitempty"`
+	TimeoutMs int          `json:"timeoutMs,omitempty" yaml:"timeoutMs,omitempty"`
+
+	// API providers
+	APIKey    string `json:"apiKey,omitempty" yaml:"-"`
+	APIKeyEnc string `json:"-" yaml:"apiKeyEnc,omitempty"`
+	Domain    string `json:"domain,omitempty" yaml:"domain,omitempty"`
+	Region    string `json:"region,omitempty" yaml:"region,omitempty"`
+
+	// SMTP provider
+	SMTP *SMTPConfig `json:"smtp,omitempty" yaml:"smtp,omitempty"`
+}
+
+// SystemSMTPConfig mantiene compatibilidad con la configuraciÃ³n SMTP heredada.
+type SystemSMTPConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	From     string
+}
+
+// IsConfigured retorna true cuando el SMTP global tiene mÃ­nimo requerido.
+func (c SystemSMTPConfig) IsConfigured() bool {
+	return c.Host != "" && c.From != ""
+}
+
+// SystemEmailConfig configura el proveedor global del sistema (env fallback).
+type SystemEmailConfig struct {
+	Provider  string
+	FromEmail string
+	ReplyTo   string
+	TimeoutMs int
+
+	ResendAPIKey   string
+	SendGridAPIKey string
+	SendGridDomain string
+	MailgunAPIKey  string
+	MailgunDomain  string
+	MailgunRegion  string
+
+	SMTP SystemSMTPConfig
+}
+
+// IsConfigured retorna true si hay un provider efectivo.
+func (c SystemEmailConfig) IsConfigured() bool {
+	return c.Provider != "" || c.SMTP.IsConfigured()
+}

@@ -171,6 +171,10 @@ type TenantExportResponse struct {
 type TenantSecretsBlock struct {
 	// Credencial del servidor SMTP del tenant
 	SMTPPassword string `json:"smtp_password,omitempty"`
+	// EmailProvider API key del tenant (resend/sendgrid/mailgun, etc.)
+	EmailProviderAPIKey string `json:"email_provider_api_key,omitempty"`
+	// EmailProvider SMTP password del tenant (cuando provider=smtp)
+	EmailProviderSMTPPassword string `json:"email_provider_smtp_password,omitempty"`
 	// DSN completo de la base de datos del tenant (incluye usuario/contraseña)
 	UserDBDSN string `json:"user_db_dsn,omitempty"`
 	// Contraseña del servidor de cache (Redis, etc.)

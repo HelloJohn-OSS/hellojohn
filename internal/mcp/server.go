@@ -23,6 +23,7 @@ func NewServer(h *Handler) *server.MCPServer {
 	registerSystemTools(s, h)
 	registerSessionTools(s, h)
 	registerWebhookTools(s, h)
+	registerMailTools(s, h)
 
 	return s
 }

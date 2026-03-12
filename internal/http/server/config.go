@@ -46,6 +46,29 @@ func (c SystemSMTPConfig) IsConfigured() bool {
 	return strings.TrimSpace(c.Host) != "" && strings.TrimSpace(c.From) != ""
 }
 
+// SystemEmailConfig define el provider global de email del sistema.
+// Mantiene compatibilidad con SMTP_* y agrega providers API.
+type SystemEmailConfig struct {
+	Provider string // smtp|resend|sendgrid|mailgun
+
+	FromEmail string // SYSTEM_EMAIL_FROM (fallback SMTP_FROM)
+	ReplyTo   string // SYSTEM_EMAIL_REPLY_TO
+	TimeoutMs int    // SYSTEM_EMAIL_TIMEOUT_MS (default 10000)
+
+	ResendAPIKey   string // SYSTEM_RESEND_API_KEY
+	SendGridAPIKey string // SYSTEM_SENDGRID_API_KEY
+	SendGridDomain string // SYSTEM_SENDGRID_DOMAIN
+	MailgunAPIKey  string // SYSTEM_MAILGUN_API_KEY
+	MailgunDomain  string // SYSTEM_MAILGUN_DOMAIN
+	MailgunRegion  string // SYSTEM_MAILGUN_REGION (us|eu)
+
+	SMTP SystemSMTPConfig
+}
+
+func (c SystemEmailConfig) IsConfigured() bool {
+	return strings.TrimSpace(c.Provider) != "" || c.SMTP.IsConfigured()
+}
+
 // Features contains runtime feature flags loaded from env.
 type Features struct {
 	// RefreshTokenReuseDetection enables refresh-token replay protection.
@@ -108,9 +131,10 @@ type GlobalConfig struct {
 	MFAAdaptiveStateTTL         time.Duration
 
 	// â”€â”€â”€ Admin â”€â”€â”€
-	AdminEnforce bool             // Strict admin mode
-	AdminSubs    []string         // Emergency admin user IDs
-	SystemSMTP   SystemSMTPConfig // SMTP global para emails del sistema
+	AdminEnforce bool              // Strict admin mode
+	AdminSubs    []string          // Emergency admin user IDs
+	SystemSMTP   SystemSMTPConfig  // Legacy SMTP global
+	SystemEmail  SystemEmailConfig // Multi-provider global
 
 	// â”€â”€â”€ UI â”€â”€â”€
 	UIBaseURL string // Frontend base URL (OAuth consent, etc.)
@@ -307,6 +331,30 @@ func LoadGlobalConfig() GlobalConfig {
 	systemSMTPPassword := strings.TrimSpace(os.Getenv("SMTP_PASSWORD"))
 	systemSMTPFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
 
+	// System Email Provider (backward-first + additive).
+	systemEmailProvider := strings.ToLower(strings.TrimSpace(os.Getenv("SYSTEM_EMAIL_PROVIDER")))
+	if systemEmailProvider == "" && systemSMTPHost != "" {
+		systemEmailProvider = "smtp"
+	}
+	systemEmailFrom := strings.TrimSpace(os.Getenv("SYSTEM_EMAIL_FROM"))
+	if systemEmailFrom == "" {
+		systemEmailFrom = systemSMTPFrom
+	}
+	systemEmailReplyTo := strings.TrimSpace(os.Getenv("SYSTEM_EMAIL_REPLY_TO"))
+	systemEmailTimeoutMs := getenvIntDefault("SYSTEM_EMAIL_TIMEOUT_MS", 10000)
+	if systemEmailTimeoutMs <= 0 {
+		systemEmailTimeoutMs = 10000
+	}
+	systemResendAPIKey := strings.TrimSpace(os.Getenv("SYSTEM_RESEND_API_KEY"))
+	systemSendGridAPIKey := strings.TrimSpace(os.Getenv("SYSTEM_SENDGRID_API_KEY"))
+	systemSendGridDomain := strings.TrimSpace(os.Getenv("SYSTEM_SENDGRID_DOMAIN"))
+	systemMailgunAPIKey := strings.TrimSpace(os.Getenv("SYSTEM_MAILGUN_API_KEY"))
+	systemMailgunDomain := strings.TrimSpace(os.Getenv("SYSTEM_MAILGUN_DOMAIN"))
+	systemMailgunRegion := strings.ToLower(strings.TrimSpace(os.Getenv("SYSTEM_MAILGUN_REGION")))
+	if systemMailgunRegion == "" {
+		systemMailgunRegion = "us"
+	}
+
 	// â”€â”€â”€ UI â”€â”€â”€
 	uiBaseURL := getenvStringFirst([]string{"UI_BASE_URL", "FRONTEND_URL"}, "http://localhost:3000")
 	uiBaseURL = strings.TrimRight(uiBaseURL, "/")
@@ -448,6 +496,25 @@ func LoadGlobalConfig() GlobalConfig {
 			User:     systemSMTPUser,
 			Password: systemSMTPPassword,
 			From:     systemSMTPFrom,
+		},
+		SystemEmail: SystemEmailConfig{
+			Provider:       systemEmailProvider,
+			FromEmail:      systemEmailFrom,
+			ReplyTo:        systemEmailReplyTo,
+			TimeoutMs:      systemEmailTimeoutMs,
+			ResendAPIKey:   systemResendAPIKey,
+			SendGridAPIKey: systemSendGridAPIKey,
+			SendGridDomain: systemSendGridDomain,
+			MailgunAPIKey:  systemMailgunAPIKey,
+			MailgunDomain:  systemMailgunDomain,
+			MailgunRegion:  systemMailgunRegion,
+			SMTP: SystemSMTPConfig{
+				Host:     systemSMTPHost,
+				Port:     systemSMTPPort,
+				User:     systemSMTPUser,
+				Password: systemSMTPPassword,
+				From:     systemSMTPFrom,
+			},
 		},
 		KeyRotationGrace:         keyRotationGrace,
 		ServiceVersion:           strings.TrimSpace(os.Getenv("SERVICE_VERSION")),

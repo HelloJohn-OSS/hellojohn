@@ -212,7 +212,7 @@ func (s *mfaEmailService) Send(ctx context.Context, tenantSlug string, req SendE
 	}
 	htmlBody := fmt.Sprintf("<p>Your HelloJohn verification code is:</p><h2>%s</h2><p>It expires in %d minutes.</p>", code, ttlMinutes)
 	textBody := fmt.Sprintf("Your HelloJohn verification code is: %s (expires in %d minutes).", code, ttlMinutes)
-	if err := sender.Send(email, s.subject, htmlBody, textBody); err != nil {
+	if err := sender.Send(ctx, email, s.subject, htmlBody, textBody); err != nil {
 		_ = cacheRepo.Delete(ctx, otpKey)
 		log.Warn("email sender failed for mfa", logger.Err(err))
 		return nil, ErrMFAEmailProviderUnavailable

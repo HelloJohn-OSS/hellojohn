@@ -52,6 +52,7 @@ type AdapterConnection interface {
 	// ─── Control Plane (solo para adapter fs, acceso via fsRawConnection) ───
 
 	Tenants() repository.TenantRepository
+	SystemSettings() repository.SystemSettingsRepository
 	Admins() repository.AdminRepository
 	AdminRefreshTokens() repository.AdminRefreshTokenRepository
 	Keys() repository.KeyRepository

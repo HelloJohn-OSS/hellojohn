@@ -177,14 +177,17 @@ func (c *pgConnection) WebAuthn() repository.WebAuthnRepository { return &webAut
 func (c *pgConnection) Tenants() repository.TenantRepository {
 	return &cpTenantRepo{pool: c.pool}
 }
+func (c *pgConnection) SystemSettings() repository.SystemSettingsRepository {
+	return &pgSystemSettingsRepo{pool: c.pool}
+}
 func (c *pgConnection) Admins() repository.AdminRepository {
 	return &cpAdminRepo{pool: c.pool}
 }
 func (c *pgConnection) AdminRefreshTokens() repository.AdminRefreshTokenRepository {
 	return &cpAdminRefreshTokenRepo{pool: c.pool}
 }
-func (c *pgConnection) Keys() repository.KeyRepository       { return nil } // Keys viven en FS
-func (c *pgConnection) APIKeys() repository.APIKeyRepository { return nil } // API Keys viven en FS
+func (c *pgConnection) Keys() repository.KeyRepository                     { return nil } // Keys viven en FS
+func (c *pgConnection) APIKeys() repository.APIKeyRepository               { return nil } // API Keys viven en FS
 func (c *pgConnection) CloudUsers() repository.CloudUserRepository         { return nil }
 func (c *pgConnection) CloudInstances() repository.CloudInstanceRepository { return nil }
 

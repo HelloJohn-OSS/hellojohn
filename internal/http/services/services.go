@@ -86,9 +86,10 @@ type Deps struct {
 	RefreshTTL time.Duration // TTL para refresh tokens
 
 	// ─── Health Check ───
-	HealthDeps  health.Deps                // Dependencias específicas para health probes
-	MasterKey   string                     // Master key hex para cifrado
-	SystemEmail emailv2.SystemEmailService // SMTP global para emails del sistema (opcional)
+	HealthDeps     health.Deps                // Dependencias específicas para health probes
+	MasterKey      string                     // Master key hex para cifrado
+	SystemEmail    emailv2.SystemEmailService // SMTP global para emails del sistema (opcional)
+	SystemEmailEnv emailv2.SystemEmailConfig
 
 	// ─── Social V2 ───
 	SocialCache        social.CacheWriter // Cache con write capabilities para social
@@ -191,6 +192,7 @@ func New(d Deps) *Services {
 			ControlPlane:                d.ControlPlane,
 			Email:                       d.Email,
 			SystemEmail:                 d.SystemEmail,
+			SystemEmailEnv:              d.SystemEmailEnv,
 			MasterKey:                   d.MasterKey,
 			Issuer:                      d.Issuer,
 			RefreshTTL:                  d.RefreshTTL,

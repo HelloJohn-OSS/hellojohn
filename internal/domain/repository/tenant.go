@@ -19,21 +19,24 @@ type Tenant struct {
 
 // TenantSettings contiene la configuración de un tenant.
 type TenantSettings struct {
-	LogoURL                     string                `json:"logoUrl" yaml:"logoUrl"`
-	BrandColor                  string                `json:"brandColor" yaml:"brandColor"`
-	SecondaryColor              string                `json:"secondaryColor" yaml:"secondaryColor"`
-	FaviconURL                  string                `json:"faviconUrl" yaml:"faviconUrl"`
-	SessionLifetimeSeconds      int                   `json:"sessionLifetimeSeconds" yaml:"sessionLifetimeSeconds"`
-	RefreshTokenLifetimeSeconds int                   `json:"refreshTokenLifetimeSeconds" yaml:"refreshTokenLifetimeSeconds"`
-	MFAEnabled                  bool                  `json:"mfaEnabled" yaml:"mfaEnabled"`
-	SocialLoginEnabled          bool                  `json:"social_login_enabled" yaml:"social_login_enabled"`
-	CookiePolicy                *CookiePolicy         `json:"cookiePolicy,omitempty" yaml:"cookiePolicy,omitempty"`
-	SMTP                        *SMTPSettings         `json:"smtp,omitempty" yaml:"smtp,omitempty"`
-	UserDB                      *UserDBSettings       `json:"userDb,omitempty" yaml:"userDb,omitempty"`
-	Cache                       *CacheSettings        `json:"cache,omitempty" yaml:"cache,omitempty"`
-	Security                    *SecurityPolicy       `json:"security,omitempty" yaml:"security,omitempty"`
-	UserFields                  []UserFieldDefinition `json:"userFields,omitempty" yaml:"userFields,omitempty"`
-	Mailing                     *MailingSettings      `json:"mailing,omitempty" yaml:"mailing,omitempty"`
+	LogoURL                     string        `json:"logoUrl" yaml:"logoUrl"`
+	BrandColor                  string        `json:"brandColor" yaml:"brandColor"`
+	SecondaryColor              string        `json:"secondaryColor" yaml:"secondaryColor"`
+	FaviconURL                  string        `json:"faviconUrl" yaml:"faviconUrl"`
+	SessionLifetimeSeconds      int           `json:"sessionLifetimeSeconds" yaml:"sessionLifetimeSeconds"`
+	RefreshTokenLifetimeSeconds int           `json:"refreshTokenLifetimeSeconds" yaml:"refreshTokenLifetimeSeconds"`
+	MFAEnabled                  bool          `json:"mfaEnabled" yaml:"mfaEnabled"`
+	SocialLoginEnabled          bool          `json:"social_login_enabled" yaml:"social_login_enabled"`
+	CookiePolicy                *CookiePolicy `json:"cookiePolicy,omitempty" yaml:"cookiePolicy,omitempty"`
+	// EmailProvider es el nuevo bloque multi-provider.
+	// Precedencia: emailProvider > smtp(legacy) > globalProvider > envProvider.
+	EmailProvider *EmailProviderSettings `json:"emailProvider,omitempty" yaml:"emailProvider,omitempty"`
+	SMTP          *SMTPSettings          `json:"smtp,omitempty" yaml:"smtp,omitempty"`
+	UserDB        *UserDBSettings        `json:"userDb,omitempty" yaml:"userDb,omitempty"`
+	Cache         *CacheSettings         `json:"cache,omitempty" yaml:"cache,omitempty"`
+	Security      *SecurityPolicy        `json:"security,omitempty" yaml:"security,omitempty"`
+	UserFields    []UserFieldDefinition  `json:"userFields,omitempty" yaml:"userFields,omitempty"`
+	Mailing       *MailingSettings       `json:"mailing,omitempty" yaml:"mailing,omitempty"`
 	// IssuerMode configura cómo se construye el issuer/JWKS por tenant.
 	IssuerMode         string                 `json:"issuerMode,omitempty" yaml:"issuerMode,omitempty"`
 	IssuerOverride     string                 `json:"issuerOverride,omitempty" yaml:"issuerOverride,omitempty"`
@@ -172,6 +175,27 @@ type SMTPSettings struct {
 	PasswordEnc string `json:"-" yaml:"passwordEnc,omitempty"` // Encrypted
 	FromEmail   string `json:"fromEmail" yaml:"fromEmail"`
 	UseTLS      bool   `json:"useTLS" yaml:"useTLS"`
+}
+
+// EmailProviderSettings configura el provider de email por tenant.
+// Secretos plain se aceptan para write-only y se persisten solo como *Enc.
+type EmailProviderSettings struct {
+	Provider  string `json:"provider" yaml:"provider"` // smtp|resend|sendgrid|mailgun
+	FromEmail string `json:"fromEmail" yaml:"fromEmail"`
+	ReplyTo   string `json:"replyTo,omitempty" yaml:"replyTo,omitempty"`
+	TimeoutMs int    `json:"timeoutMs,omitempty" yaml:"timeoutMs,omitempty"`
+
+	APIKey    string `json:"apiKey,omitempty" yaml:"-"`
+	APIKeyEnc string `json:"-" yaml:"apiKeyEnc,omitempty"`
+	Domain    string `json:"domain,omitempty" yaml:"domain,omitempty"`
+	Region    string `json:"region,omitempty" yaml:"region,omitempty"`
+
+	SMTPHost        string `json:"smtpHost,omitempty" yaml:"smtpHost,omitempty"`
+	SMTPPort        int    `json:"smtpPort,omitempty" yaml:"smtpPort,omitempty"`
+	SMTPUsername    string `json:"smtpUsername,omitempty" yaml:"smtpUsername,omitempty"`
+	SMTPPassword    string `json:"smtpPassword,omitempty" yaml:"-"`
+	SMTPPasswordEnc string `json:"-" yaml:"smtpPasswordEnc,omitempty"`
+	SMTPUseTLS      bool   `json:"smtpUseTLS,omitempty" yaml:"smtpUseTLS,omitempty"`
 }
 
 // UserDBSettings configuración de DB por tenant.

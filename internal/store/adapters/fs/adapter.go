@@ -73,6 +73,9 @@ func (c *fsConnection) Close() error { return nil }
 // ─── Repositorios soportados ───
 
 func (c *fsConnection) Tenants() repository.TenantRepository { return &tenantRepo{conn: c} }
+func (c *fsConnection) SystemSettings() repository.SystemSettingsRepository {
+	return &fsSystemSettingsRepo{conn: c}
+}
 func (c *fsConnection) Keys() repository.KeyRepository {
 	return newKeyRepo(filepath.Join(c.root, "keys"), c.signingMasterKey)
 }
@@ -80,9 +83,9 @@ func (c *fsConnection) Admins() repository.AdminRepository { return newAdminRepo
 func (c *fsConnection) AdminRefreshTokens() repository.AdminRefreshTokenRepository {
 	return newAdminRefreshTokenRepo(c.root)
 }
-func (c *fsConnection) APIKeys() repository.APIKeyRepository       { return newAPIKeyRepo(c.root) }
-func (c *fsConnection) CloudUsers() repository.CloudUserRepository             { return nil }
-func (c *fsConnection) CloudInstances() repository.CloudInstanceRepository     { return nil }
+func (c *fsConnection) APIKeys() repository.APIKeyRepository               { return newAPIKeyRepo(c.root) }
+func (c *fsConnection) CloudUsers() repository.CloudUserRepository         { return nil }
+func (c *fsConnection) CloudInstances() repository.CloudInstanceRepository { return nil }
 
 // ─── FSRawConnection (store-internal) ───
 // Estos métodos satisfacen la interfaz store.FSRawConnection y permiten que
@@ -1197,6 +1200,21 @@ type customOIDCYAML struct {
 	Scopes          []string `yaml:"scopes,omitempty"`
 }
 
+type emailProviderYAML struct {
+	Provider        string `yaml:"provider,omitempty"`
+	FromEmail       string `yaml:"fromEmail,omitempty"`
+	ReplyTo         string `yaml:"replyTo,omitempty"`
+	TimeoutMs       int    `yaml:"timeoutMs,omitempty"`
+	APIKeyEnc       string `yaml:"apiKeyEnc,omitempty"`
+	Domain          string `yaml:"domain,omitempty"`
+	Region          string `yaml:"region,omitempty"`
+	SMTPHost        string `yaml:"smtpHost,omitempty"`
+	SMTPPort        int    `yaml:"smtpPort,omitempty"`
+	SMTPUsername    string `yaml:"smtpUsername,omitempty"`
+	SMTPPasswordEnc string `yaml:"smtpPasswordEnc,omitempty"`
+	SMTPUseTLS      bool   `yaml:"smtpUseTLS,omitempty"`
+}
+
 // ─── YAML Types ───
 
 type tenantYAML struct {
@@ -1231,6 +1249,7 @@ type tenantSettingsYAML struct {
 		FromEmail   string `yaml:"fromEmail,omitempty"`
 		UseTLS      bool   `yaml:"useTLS,omitempty"`
 	} `yaml:"smtp,omitempty"`
+	EmailProvider *emailProviderYAML `yaml:"emailProvider,omitempty"`
 
 	UserDB *struct {
 		Driver     string `yaml:"driver,omitempty"`
@@ -1419,6 +1438,23 @@ func (t *tenantYAML) toRepository(slug string) *repository.Tenant {
 			PasswordEnc: t.Settings.SMTP.PasswordEnc,
 			FromEmail:   t.Settings.SMTP.FromEmail,
 			UseTLS:      t.Settings.SMTP.UseTLS,
+		}
+	}
+
+	if t.Settings.EmailProvider != nil {
+		tenant.Settings.EmailProvider = &repository.EmailProviderSettings{
+			Provider:        t.Settings.EmailProvider.Provider,
+			FromEmail:       t.Settings.EmailProvider.FromEmail,
+			ReplyTo:         t.Settings.EmailProvider.ReplyTo,
+			TimeoutMs:       t.Settings.EmailProvider.TimeoutMs,
+			APIKeyEnc:       t.Settings.EmailProvider.APIKeyEnc,
+			Domain:          t.Settings.EmailProvider.Domain,
+			Region:          t.Settings.EmailProvider.Region,
+			SMTPHost:        t.Settings.EmailProvider.SMTPHost,
+			SMTPPort:        t.Settings.EmailProvider.SMTPPort,
+			SMTPUsername:    t.Settings.EmailProvider.SMTPUsername,
+			SMTPPasswordEnc: t.Settings.EmailProvider.SMTPPasswordEnc,
+			SMTPUseTLS:      t.Settings.EmailProvider.SMTPUseTLS,
 		}
 	}
 
@@ -1673,6 +1709,25 @@ func toTenantYAML(t *repository.Tenant) *tenantYAML {
 			PasswordEnc: t.Settings.SMTP.PasswordEnc,
 			FromEmail:   t.Settings.SMTP.FromEmail,
 			UseTLS:      t.Settings.SMTP.UseTLS,
+		}
+	}
+
+	// Email provider (multi-provider)
+	if t.Settings.EmailProvider != nil {
+		ep := t.Settings.EmailProvider
+		y.Settings.EmailProvider = &emailProviderYAML{
+			Provider:        ep.Provider,
+			FromEmail:       ep.FromEmail,
+			ReplyTo:         ep.ReplyTo,
+			TimeoutMs:       ep.TimeoutMs,
+			APIKeyEnc:       ep.APIKeyEnc,
+			Domain:          ep.Domain,
+			Region:          ep.Region,
+			SMTPHost:        ep.SMTPHost,
+			SMTPPort:        ep.SMTPPort,
+			SMTPUsername:    ep.SMTPUsername,
+			SMTPPasswordEnc: ep.SMTPPasswordEnc,
+			SMTPUseTLS:      ep.SMTPUseTLS,
 		}
 	}
 

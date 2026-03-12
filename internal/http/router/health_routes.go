@@ -19,6 +19,8 @@ func RegisterHealthRoutes(mux *http.ServeMux, deps HealthRouterDeps) {
 
 	// GET /readyz - health check público
 	mux.Handle("/readyz", healthBaseHandler(http.HandlerFunc(c.Health.Readyz)))
+	// GET /health - legacy alias kept for backward compatibility in integrations.
+	mux.Handle("/health", healthBaseHandler(http.HandlerFunc(c.Health.Readyz)))
 }
 
 // healthBaseHandler crea el middleware chain base para endpoints de health.

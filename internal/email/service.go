@@ -66,7 +66,12 @@ type ServiceConfig struct {
 	DefaultResetHTMLTmpl  string
 	DefaultResetTextTmpl  string
 
-	SystemSMTP SystemSMTPConfig // SMTP global de fallback (opcional)
+	// Legacy config (backward compatible).
+	SystemSMTP SystemSMTPConfig
+	// Nueva configuraciÃ³n global multi-provider para fallback env.
+	SystemEmail SystemEmailConfig
+	// Repositorio de system settings para Global Provider (nivel 3).
+	SystemSettings repository.SystemSettingsRepository
 }
 
 // ─── Implementation ───
@@ -100,9 +105,22 @@ func NewService(cfg ServiceConfig) (Service, error) {
 		cfg.ResetTTL = 1 * time.Hour
 	}
 
+	systemEmail := cfg.SystemEmail
+	if !systemEmail.IsConfigured() && cfg.SystemSMTP.IsConfigured() {
+		systemEmail = SystemEmailConfig{
+			Provider:  string(ProviderKindSMTP),
+			FromEmail: cfg.SystemSMTP.From,
+			SMTP:      cfg.SystemSMTP,
+		}
+	}
+	systemSettings := cfg.SystemSettings
+	if systemSettings == nil && cfg.DAL != nil {
+		systemSettings = cfg.DAL.ConfigAccess().SystemSettings()
+	}
+
 	s := &service{
 		dal:            cfg.DAL,
-		senderProvider: NewSenderProvider(cfg.DAL, cfg.MasterKey, cfg.SystemSMTP),
+		senderProvider: NewSenderFactory(cfg.DAL, cfg.MasterKey, systemEmail, systemSettings),
 		masterKey:      cfg.MasterKey,
 		baseURL:        cfg.BaseURL,
 		verifyTTL:      cfg.VerifyTTL,
@@ -200,7 +218,7 @@ func (s *service) SendVerificationEmail(ctx context.Context, req SendVerificatio
 
 	// Enviar
 	subject := "Verificá tu email"
-	if err := sender.Send(req.Email, subject, htmlBody, textBody); err != nil {
+	if err := sender.Send(ctx, req.Email, subject, htmlBody, textBody); err != nil {
 		diag := DiagnoseSMTP(err)
 		log.Error("failed to send email",
 			logger.Err(err),
@@ -275,7 +293,7 @@ func (s *service) SendPasswordResetEmail(ctx context.Context, req SendPasswordRe
 
 	// Enviar
 	subject := "Restablecé tu contraseña"
-	if err := sender.Send(req.Email, subject, htmlBody, textBody); err != nil {
+	if err := sender.Send(ctx, req.Email, subject, htmlBody, textBody); err != nil {
 		diag := DiagnoseSMTP(err)
 		log.Error("failed to send email",
 			logger.Err(err),
@@ -335,7 +353,7 @@ func (s *service) SendNotificationEmail(ctx context.Context, req SendNotificatio
 	}
 
 	// Enviar
-	if err := sender.Send(req.Email, subject, htmlBody, textBody); err != nil {
+	if err := sender.Send(ctx, req.Email, subject, htmlBody, textBody); err != nil {
 		diag := DiagnoseSMTP(err)
 		log.Error("failed to send email",
 			logger.Err(err),
@@ -392,7 +410,7 @@ func (s *service) TestSMTP(ctx context.Context, tenantSlugOrID, recipientEmail s
 	emailContent := GetTestEmailContent(tenantName, timestamp, tenantLang)
 
 	// Enviar
-	if err := sender.Send(recipientEmail, emailContent.Subject, emailContent.HTMLBody, emailContent.TextBody); err != nil {
+	if err := sender.Send(ctx, recipientEmail, emailContent.Subject, emailContent.HTMLBody, emailContent.TextBody); err != nil {
 		diag := DiagnoseSMTP(err)
 		log.Error("test email failed",
 			logger.Err(err),

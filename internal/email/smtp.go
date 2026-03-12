@@ -1,6 +1,7 @@
 package emailv2
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 
@@ -43,7 +44,11 @@ func FromConfig(cfg SMTPConfig) *SMTPSender {
 }
 
 // Send envía un email con contenido HTML y texto plano.
-func (s *SMTPSender) Send(to, subject, htmlBody, textBody string) error {
+func (s *SMTPSender) Send(ctx context.Context, to, subject, htmlBody, textBody string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	log := logger.L().With(
 		logger.String("component", "SMTPSender"),
 		logger.String("host", s.Host),
@@ -89,9 +94,20 @@ func (s *SMTPSender) Send(to, subject, htmlBody, textBody string) error {
 		// "auto"/"starttls": go-mail negocia STARTTLS si corresponde
 	}
 
-	if err := d.DialAndSend(m); err != nil {
-		log.Error("smtp send failed", logger.Err(err))
-		return fmt.Errorf("smtp send: %w", err)
+	sendCh := make(chan error, 1)
+	go func() {
+		sendCh <- d.DialAndSend(m)
+	}()
+
+	select {
+	case err := <-sendCh:
+		if err != nil {
+			log.Error("smtp send failed", logger.Err(err))
+			return fmt.Errorf("smtp send: %w", err)
+		}
+	case <-ctx.Done():
+		log.Error("smtp send canceled", logger.Err(ctx.Err()))
+		return fmt.Errorf("smtp send: %w", ctx.Err())
 	}
 
 	log.Info("email sent successfully")
