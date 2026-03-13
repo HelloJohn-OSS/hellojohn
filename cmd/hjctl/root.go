@@ -106,6 +106,8 @@ func init() {
 	rootCmd.AddCommand(commands.NewConsentCmd(getClient, outputFmt, getTenant))
 	rootCmd.AddCommand(commands.NewInvitationCmd(getClient, outputFmt, getTenant))
 	rootCmd.AddCommand(commands.NewMigrateCmd(getClient, outputFmt))
+	rootCmd.AddCommand(commands.NewLocalCmd())
+	rootCmd.AddCommand(commands.NewTunnelWorkerCmd())
 
 	// MCP server command — uses raw base URL/API key getters (not Client)
 	rootCmd.AddCommand(commands.NewMCPCmd(

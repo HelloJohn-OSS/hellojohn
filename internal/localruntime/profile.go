@@ -1,0 +1,508 @@
+package localruntime
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strings"
+	"time"
+)
+
+var (
+	envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	hex64Pattern  = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+)
+
+type lineKind int
+
+const (
+	lineBlank lineKind = iota
+	lineComment
+	lineKV
+	lineCommentedKV
+	lineRaw
+)
+
+type profileLine struct {
+	kind  lineKind
+	raw   string
+	key   string
+	value string
+}
+
+// ValidationError describes a profile validation problem.
+type ValidationError struct {
+	Key     string
+	Message string
+}
+
+// ProfileEntry represents one key/value line in a profile file.
+// Active=false means the key is present but commented out.
+type ProfileEntry struct {
+	Key    string
+	Value  string
+	Active bool
+}
+
+// LoadProfile loads the active KEY=VALUE pairs from a profile env file.
+// Commented assignments are ignored.
+func LoadProfile(profile string) (map[string]string, error) {
+	if err := ValidateProfileName(profile); err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(EnvFile(profile))
+	if err != nil {
+		return nil, fmt.Errorf("read profile %q: %w", sanitizeProfile(profile), err)
+	}
+
+	lines := parseProfileLines(data)
+	values := make(map[string]string, len(lines))
+	for _, line := range lines {
+		if line.kind == lineKV {
+			values[line.key] = line.value
+		}
+	}
+	return values, nil
+}
+
+// WriteProfile atomically updates or inserts KEY=VALUE pairs while preserving
+// comment lines and existing key order.
+func WriteProfile(profile string, values map[string]string) error {
+	if err := ValidateProfileName(profile); err != nil {
+		return err
+	}
+
+	if len(values) == 0 {
+		return nil
+	}
+
+	path := EnvFile(profile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create env dir: %w", err)
+	}
+
+	var existing []byte
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read profile %q: %w", sanitizeProfile(profile), err)
+		}
+	} else {
+		existing = data
+	}
+
+	lines := parseProfileLines(existing)
+	used := make(map[string]bool, len(values))
+	out := make([]string, 0, len(lines)+len(values))
+
+	for _, line := range lines {
+		switch line.kind {
+		case lineKV:
+			if value, ok := values[line.key]; ok {
+				out = append(out, formatAssignment(line.key, value))
+				used[line.key] = true
+			} else {
+				out = append(out, line.raw)
+			}
+		case lineCommentedKV:
+			if value, ok := values[line.key]; ok && !used[line.key] {
+				out = append(out, formatAssignment(line.key, value))
+				used[line.key] = true
+			} else {
+				out = append(out, line.raw)
+			}
+		default:
+			out = append(out, line.raw)
+		}
+	}
+
+	missing := make([]string, 0, len(values))
+	for key := range values {
+		if !used[key] {
+			missing = append(missing, key)
+		}
+	}
+	sort.Strings(missing)
+	for _, key := range missing {
+		out = append(out, formatAssignment(key, values[key]))
+	}
+
+	finalText := strings.Join(out, "\n")
+	if finalText == "" || !strings.HasSuffix(finalText, "\n") {
+		finalText += "\n"
+	}
+
+	if err := writeFileAtomic(path, []byte(finalText), 0o600); err != nil {
+		return fmt.Errorf("write profile %q: %w", sanitizeProfile(profile), err)
+	}
+	return nil
+}
+
+// InitProfile creates a profile env file with sensible defaults.
+func InitProfile(profile string, force bool) error {
+	if err := ValidateProfileName(profile); err != nil {
+		return err
+	}
+
+	path := EnvFile(profile)
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("profile %q already exists at %s (use --force to overwrite)", sanitizeProfile(profile), path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat profile %q: %w", sanitizeProfile(profile), err)
+		}
+	}
+
+	signing, err := randomHex(32)
+	if err != nil {
+		return fmt.Errorf("generate SIGNING_MASTER_KEY: %w", err)
+	}
+	secretbox, err := randomBase64(32)
+	if err != nil {
+		return fmt.Errorf("generate SECRETBOX_MASTER_KEY: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	content := fmt.Sprintf(`# HelloJohn OSS - Local Runtime Environment
+# Profile: %s
+# Generated: %s
+# Edit with: hjctl local env edit
+
+# --- Required --------------------------------------------------------------
+SIGNING_MASTER_KEY=%s
+SECRETBOX_MASTER_KEY=%s
+
+# --- Server Defaults -------------------------------------------------------
+APP_ENV=dev
+BASE_URL=http://localhost:8080
+UI_BASE_URL=http://localhost:3000
+FS_ROOT=data
+CORS_ORIGINS=http://localhost:3000
+FS_ADMIN_ENABLE=true
+
+# --- HelloJohn Cloud Tunnel ------------------------------------------------
+# To connect this instance to the HelloJohn Cloud panel:
+#   1. Go to cloud.hellojohn.com and register your instance
+#   2. Generate a tunnel token in the instance settings
+#   3. Uncomment and fill the values below, then run: hjctl local connect
+#
+# HELLOJOHN_CLOUD_URL=https://cloud.hellojohn.com
+# HELLOJOHN_TUNNEL_TOKEN=hjtun_your_token_here
+`, sanitizeProfile(profile), now, signing, secretbox)
+
+	if err := writeFileAtomic(path, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("init profile %q: %w", sanitizeProfile(profile), err)
+	}
+	return nil
+}
+
+// RedactValue decides whether a KEY/VALUE should be masked in CLI output.
+func RedactValue(key, value string) bool {
+	normalizedKey := strings.ToUpper(strings.TrimSpace(key))
+	switch {
+	case strings.HasSuffix(normalizedKey, "_KEY"):
+		return true
+	case strings.HasSuffix(normalizedKey, "_SECRET"):
+		return true
+	case strings.HasSuffix(normalizedKey, "_PASSWORD"):
+		return true
+	case strings.HasSuffix(normalizedKey, "_TOKEN"):
+		return true
+	}
+
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "hjtun_")
+}
+
+// ValidateProfile validates required keys and selected formats.
+func ValidateProfile(profile string) []ValidationError {
+	if err := ValidateProfileName(profile); err != nil {
+		return []ValidationError{{
+			Key:     "PROFILE",
+			Message: err.Error(),
+		}}
+	}
+
+	values, err := LoadProfile(profile)
+	if err != nil {
+		return []ValidationError{{
+			Key:     "PROFILE",
+			Message: err.Error(),
+		}}
+	}
+
+	var out []ValidationError
+	addErr := func(key, message string) {
+		out = append(out, ValidationError{Key: key, Message: message})
+	}
+
+	signing := strings.TrimSpace(values["SIGNING_MASTER_KEY"])
+	if signing == "" {
+		addErr("SIGNING_MASTER_KEY", "missing required key")
+	} else if !hex64Pattern.MatchString(signing) {
+		addErr("SIGNING_MASTER_KEY", "must be 64 hex characters")
+	}
+
+	secret := strings.TrimSpace(values["SECRETBOX_MASTER_KEY"])
+	if secret == "" {
+		addErr("SECRETBOX_MASTER_KEY", "missing required key")
+	} else {
+		decoded, decodeErr := base64.StdEncoding.DecodeString(secret)
+		if decodeErr != nil || len(decoded) != 32 {
+			addErr("SECRETBOX_MASTER_KEY", "must be valid base64 encoding of 32 bytes")
+		}
+	}
+
+	validateURL := func(key string) {
+		raw := strings.TrimSpace(values[key])
+		if raw == "" {
+			return
+		}
+		parsed, parseErr := url.Parse(raw)
+		if parseErr != nil || parsed.Scheme == "" || parsed.Host == "" {
+			addErr(key, "must be an absolute URL")
+		}
+	}
+	validateURL("BASE_URL")
+	validateURL("UI_BASE_URL")
+	validateURL("HELLOJOHN_CLOUD_URL")
+
+	token := strings.TrimSpace(values["HELLOJOHN_TUNNEL_TOKEN"])
+	if token != "" && !strings.HasPrefix(strings.ToLower(token), "hjtun_") {
+		addErr("HELLOJOHN_TUNNEL_TOKEN", "must start with hjtun_")
+	}
+
+	return out
+}
+
+// ListProfileEntries returns all key lines (active and commented) preserving
+// first-seen order. If a key appears multiple times, the latest definition wins.
+func ListProfileEntries(profile string) ([]ProfileEntry, error) {
+	if err := ValidateProfileName(profile); err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(EnvFile(profile))
+	if err != nil {
+		return nil, fmt.Errorf("read profile %q: %w", sanitizeProfile(profile), err)
+	}
+
+	lines := parseProfileLines(data)
+	indexByKey := make(map[string]int)
+	entries := make([]ProfileEntry, 0, len(lines))
+
+	for _, line := range lines {
+		if line.kind != lineKV && line.kind != lineCommentedKV {
+			continue
+		}
+
+		entry := ProfileEntry{
+			Key:    line.key,
+			Value:  line.value,
+			Active: line.kind == lineKV,
+		}
+
+		if idx, ok := indexByKey[line.key]; ok {
+			entries[idx] = entry
+			continue
+		}
+		indexByKey[line.key] = len(entries)
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+// UnsetProfileKeys removes active or commented assignments for keys.
+func UnsetProfileKeys(profile string, keys ...string) error {
+	if err := ValidateProfileName(profile); err != nil {
+		return err
+	}
+
+	if len(keys) == 0 {
+		return nil
+	}
+
+	path := EnvFile(profile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read profile %q: %w", sanitizeProfile(profile), err)
+	}
+
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		keySet[key] = struct{}{}
+	}
+	if len(keySet) == 0 {
+		return nil
+	}
+
+	lines := parseProfileLines(data)
+	out := make([]string, 0, len(lines))
+	removed := false
+
+	for _, line := range lines {
+		if line.kind == lineKV || line.kind == lineCommentedKV {
+			if _, ok := keySet[line.key]; ok {
+				removed = true
+				continue
+			}
+		}
+		out = append(out, line.raw)
+	}
+
+	if !removed {
+		sorted := make([]string, 0, len(keySet))
+		for key := range keySet {
+			sorted = append(sorted, key)
+		}
+		sort.Strings(sorted)
+		return fmt.Errorf("key not found: %s", strings.Join(sorted, ", "))
+	}
+
+	finalText := strings.Join(out, "\n")
+	if finalText == "" || !strings.HasSuffix(finalText, "\n") {
+		finalText += "\n"
+	}
+	if err := writeFileAtomic(path, []byte(finalText), 0o600); err != nil {
+		return fmt.Errorf("write profile %q: %w", sanitizeProfile(profile), err)
+	}
+	return nil
+}
+
+func parseProfileLines(data []byte) []profileLine {
+	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
+	parts := strings.Split(normalized, "\n")
+	if len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+
+	lines := make([]profileLine, 0, len(parts))
+	for _, raw := range parts {
+		trimmed := strings.TrimSpace(raw)
+		switch {
+		case trimmed == "":
+			lines = append(lines, profileLine{kind: lineBlank, raw: raw})
+		case strings.HasPrefix(trimmed, "#"):
+			inner := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
+			key, value, ok := parseEnvAssignment(inner)
+			if ok {
+				lines = append(lines, profileLine{
+					kind:  lineCommentedKV,
+					raw:   raw,
+					key:   key,
+					value: value,
+				})
+			} else {
+				lines = append(lines, profileLine{kind: lineComment, raw: raw})
+			}
+		default:
+			key, value, ok := parseEnvAssignment(trimmed)
+			if !ok {
+				lines = append(lines, profileLine{kind: lineRaw, raw: raw})
+				continue
+			}
+			lines = append(lines, profileLine{
+				kind:  lineKV,
+				raw:   raw,
+				key:   key,
+				value: value,
+			})
+		}
+	}
+	return lines
+}
+
+func parseEnvAssignment(raw string) (string, string, bool) {
+	idx := strings.Index(raw, "=")
+	if idx <= 0 {
+		return "", "", false
+	}
+
+	key := strings.TrimSpace(raw[:idx])
+	if !envKeyPattern.MatchString(key) {
+		return "", "", false
+	}
+
+	value := strings.TrimSpace(raw[idx+1:])
+	if len(value) >= 2 {
+		if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+			value = value[1 : len(value)-1]
+		}
+	}
+
+	return key, value, true
+}
+
+func formatAssignment(key, value string) string {
+	if strings.ContainsAny(value, " \t\r\n\"'") {
+		escaped := strings.ReplaceAll(value, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+		return fmt.Sprintf(`%s="%s"`, key, escaped)
+	}
+	return fmt.Sprintf("%s=%s", key, value)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Chmod(tmpPath, perm); err != nil && runtime.GOOS != "windows" {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := replaceFileAtomic(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	if err := os.Chmod(path, perm); err != nil && runtime.GOOS != "windows" {
+		return fmt.Errorf("chmod profile: %w", err)
+	}
+	return nil
+}
+
+func randomHex(size int) (string, error) {
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func randomBase64(size int) (string, error) {
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf), nil
+}

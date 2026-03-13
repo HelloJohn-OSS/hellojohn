@@ -588,6 +588,39 @@ settings:
 
 ---
 
+## Running Locally with hjctl
+
+`hjctl local` manages a local HelloJohn instance as a set of background processes.
+It handles keys, configuration profiles, health checks, log streaming, and an
+optional cloud relay tunnel — all without Docker or a process manager.
+
+```bash
+# Build the CLI
+go build -o hjctl ./cmd/hjctl
+
+# 1. Initialise a profile (generates SIGNING_MASTER_KEY and SECRETBOX_MASTER_KEY)
+hjctl local init
+
+# 2. Start the server in the background
+hjctl local start
+
+# 3. Check status
+hjctl local status
+
+# 4. (Optional) Connect to the cloud relay tunnel
+hjctl local env set HELLOJOHN_CLOUD_URL=https://cloud.hellojohn.com
+hjctl local env set HELLOJOHN_TUNNEL_TOKEN=hjtun_...
+hjctl local connect
+
+# 5. Stop everything when done
+hjctl local stop
+```
+
+For the full `hjctl local` reference — including profiles, env management, tunnel
+lifecycle, and all flags — see [`cmd/hjctl/README.md`](cmd/hjctl/README.md#local).
+
+---
+
 ## Contributing
 
 1. Fork the repository

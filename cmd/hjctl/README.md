@@ -33,6 +33,7 @@
   - [claim](#claim)
   - [invitation](#invitation)
   - [mcp](#mcp)
+  - [local](#local)
 - [Examples](#examples)
 
 ---
@@ -720,6 +721,397 @@ For the MCP server documentation (integration guide, full tool reference, and Cl
 
 ---
 
+### local
+
+Manage a local HelloJohn instance — start/stop the server process, connect it to the
+HelloJohn Cloud relay tunnel, and manage the environment profile that holds its
+configuration.
+
+All data is stored under `~/.hellojohn/`:
+
+```
+~/.hellojohn/
+├── env/
+│   └── default.env          # Profile env file (edit via hjctl local env)
+├── run/
+│   ├── hellojohn.pid        # Server PID
+│   ├── state.json           # Server state (port, uptime, profile)
+│   ├── hellojohn.log        # Server stdout/stderr
+│   ├── tunnel.pid           # Tunnel worker PID
+│   ├── tunnel.state.json    # Tunnel state (connected, cloud URL)
+│   └── tunnel.log           # Tunnel worker stdout/stderr
+└── bin/
+    └── hellojohn            # Optional: place binary here for auto-discovery
+```
+
+#### Quickstart
+
+```bash
+# 1. Create a profile with auto-generated keys
+hjctl local init
+
+# 2. Review / edit generated values
+hjctl local env list
+
+# 3. Start the server in the background
+hjctl local start
+
+# 4. Connect to HelloJohn Cloud (optional)
+hjctl local connect --token hjtun_your_token_here
+
+# 5. Check everything
+hjctl local status
+```
+
+---
+
+#### `hjctl local init`
+
+Create the profile env file (`~/.hellojohn/env/default.env`) with auto-generated
+`SIGNING_MASTER_KEY` and `SECRETBOX_MASTER_KEY`. Safe to re-run with `--force` if
+you want to reset credentials.
+
+```
+hjctl local init [--profile <name>] [--force]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--profile` | `default` | Profile name (alphanumeric, hyphens; no spaces or colons). |
+| `--force` | `false` | Overwrite an existing profile file. |
+
+**Examples:**
+
+```bash
+hjctl local init
+hjctl local init --profile staging
+hjctl local init --force           # reset default profile
+```
+
+---
+
+#### `hjctl local start`
+
+Start the `hellojohn` server as a background process. Waits up to ~8 s for the
+health endpoint to respond before returning.
+
+```
+hjctl local start [--profile <name>] [--port <n>] [--foreground]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--profile` | `default` | Profile to load env vars from. |
+| `--port` | from `BASE_URL` | Override the server port. |
+| `--foreground` | `false` | Run in the foreground (blocks the terminal; Ctrl+C to stop). |
+
+**Examples:**
+
+```bash
+hjctl local start
+hjctl local start --port 9090
+hjctl local start --foreground     # attach to terminal
+```
+
+---
+
+#### `hjctl local stop`
+
+Stop running processes. Sends SIGTERM → waits 5 s → SIGKILL if needed.
+
+```
+hjctl local stop [--server-only] [--tunnel-only]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server-only` | `false` | Stop only the server (leave tunnel running). |
+| `--tunnel-only` | `false` | Stop only the tunnel (leave server running). |
+
+> **Tip:** To stop just the tunnel interactively, prefer `hjctl local tunnel stop` —
+> it is the canonical path and lives in the same command group as `status` and `logs`.
+> `--tunnel-only` is useful in scripts.
+
+**Examples:**
+
+```bash
+hjctl local stop                   # stop everything
+hjctl local stop --server-only
+hjctl local stop --tunnel-only     # scripting shorthand; see also: hjctl local tunnel stop
+```
+
+---
+
+#### `hjctl local status`
+
+Show a unified view of the server and tunnel.
+
+```
+hjctl local status [--profile <name>]
+```
+
+**Sample output:**
+
+```
+Local runtime status (profile: default)
+  Server : running (pid 12345) - http://localhost:8080 - healthy
+  Tunnel : connected (pid 12346)
+```
+
+---
+
+#### `hjctl local logs`
+
+Stream the server log file.
+
+```
+hjctl local logs [--tail <n>] [--follow] [--profile <name>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tail` | `200` | Lines to show from the end of the file. |
+| `--follow` | `false` | Keep streaming new lines (Ctrl+C to stop). |
+
+**Examples:**
+
+```bash
+hjctl local logs
+hjctl local logs --tail 50 --follow
+```
+
+---
+
+#### `hjctl local connect`
+
+Connect the local server to the HelloJohn Cloud relay tunnel. The tunnel runs as a
+background worker (`_tunnel-worker`) that opens an outbound WebSocket to the cloud
+relay — no inbound firewall rules or port forwarding required.
+
+```
+hjctl local connect [--token <hjtun_...>] [--cloud-url <url>] [--base-url <url>] [--profile <name>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--token` | from profile / `HELLOJOHN_TUNNEL_TOKEN` | Tunnel token (starts with `hjtun_`). Required. |
+| `--cloud-url` | from profile / `HELLOJOHN_CLOUD_URL` | HelloJohn Cloud URL. Required. |
+| `--base-url` | `http://localhost:8080` | Local server URL the tunnel forwards to. |
+| `--profile` | `default` | Profile to read settings from. |
+
+**Token resolution order** (first non-empty wins):
+
+1. `--token` flag
+2. `HELLOJOHN_TUNNEL_TOKEN` in the profile env file
+3. `HELLOJOHN_TUNNEL_TOKEN` OS environment variable
+
+**Examples:**
+
+```bash
+# Token stored in profile (recommended)
+hjctl local env set HELLOJOHN_TUNNEL_TOKEN=hjtun_...
+hjctl local env set HELLOJOHN_CLOUD_URL=https://cloud.hellojohn.com
+hjctl local connect
+
+# One-off with flags
+hjctl local connect --token hjtun_... --cloud-url https://cloud.hellojohn.com
+
+# Custom local port
+hjctl local connect --base-url http://localhost:9090
+```
+
+After connecting, the command waits up to 5 s for the worker to confirm the
+WebSocket is established, then prints the PID and suggests next steps.
+
+---
+
+#### `hjctl local tunnel`
+
+Manage the running tunnel worker. This is the primary interface for checking
+status, reading logs, and stopping the tunnel.
+
+```
+hjctl local tunnel <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `status` | Show tunnel status, uptime, cloud URL, and token prefix. |
+| `stop` | Gracefully stop the tunnel worker. **Primary stop path.** |
+| `logs` | Stream the tunnel log file. |
+
+##### `hjctl local tunnel status`
+
+```bash
+hjctl local tunnel status
+```
+
+**Sample output:**
+
+```
+Tunnel: connected
+  PID: 12346
+  Uptime: 3m42s
+  Cloud URL: https://cloud.hellojohn.com
+  Token Prefix: hjtun_abc12
+```
+
+When the worker is running but WebSocket is reconnecting:
+
+```
+Tunnel: running (reconnecting)
+  PID: 12346
+  Uptime: 12s
+```
+
+##### `hjctl local tunnel stop`
+
+Gracefully stops the tunnel worker. Sends SIGTERM, waits up to 5 s, then SIGKILL.
+
+```bash
+hjctl local tunnel stop
+```
+
+##### `hjctl local tunnel logs`
+
+```
+hjctl local tunnel logs [--tail <n>] [--follow]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tail` | `200` | Lines to show from the end of the file. |
+| `--follow` | `false` | Keep streaming new lines (Ctrl+C to stop). |
+
+**Examples:**
+
+```bash
+hjctl local tunnel logs
+hjctl local tunnel logs --tail 50 --follow
+```
+
+---
+
+#### `hjctl local env`
+
+Read and write the profile env file without opening it manually. Supports comments,
+preserves file order, and redacts sensitive keys in list output.
+
+```
+hjctl local env <subcommand> [--profile <name>]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | Print all key/value pairs (sensitive values redacted). |
+| `get <KEY>` | Print the value of a single key. |
+| `set <KEY>=<VALUE>` | Set or update a key. Uncomments the line if it was commented out. |
+| `unset <KEY>` | Remove a key from the file entirely. |
+| `edit` | Open the env file in `$EDITOR` / `$VISUAL` (falls back to `nano` or `vi`). |
+| `validate` | Check that required keys are present and valid. |
+
+**Key rules:**
+- Format: `[A-Za-z_][A-Za-z0-9_]*` (standard env variable names).
+- Values are stored verbatim — leading/trailing spaces are preserved.
+- Sensitive keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, values starting with `hjtun_`) are
+  redacted in `list` output. Use `--reveal` on `get` to see the raw value.
+
+**Profile name rules:**
+- Alphanumeric characters, hyphens, and underscores only.
+- No spaces, colons, path separators, or `..` sequences.
+
+**Examples:**
+
+```bash
+# View all settings
+hjctl local env list
+
+# Read a value
+hjctl local env get BASE_URL
+hjctl local env get HELLOJOHN_TUNNEL_TOKEN --reveal
+
+# Set values
+hjctl local env set BASE_URL=http://localhost:8080
+hjctl local env set HELLOJOHN_TUNNEL_TOKEN=hjtun_live_token_here
+hjctl local env set HELLOJOHN_CLOUD_URL=https://cloud.hellojohn.com
+
+# Remove a key
+hjctl local env unset HELLOJOHN_TUNNEL_TOKEN
+
+# Open in editor
+hjctl local env edit
+
+# Check required keys are set
+hjctl local env validate
+```
+
+**Profile env file format** (`~/.hellojohn/env/default.env`):
+
+```bash
+# Generated by hjctl local init
+SIGNING_MASTER_KEY=<64-char hex>
+SECRETBOX_MASTER_KEY=<base64-32-bytes>
+APP_ENV=dev
+BASE_URL=http://localhost:8080
+
+# Cloud tunnel (uncomment to use)
+# HELLOJOHN_CLOUD_URL=https://cloud.hellojohn.com
+# HELLOJOHN_TUNNEL_TOKEN=hjtun_...
+```
+
+The file uses standard `.env` syntax: `KEY=VALUE` pairs, `#` for comments. Lines
+that are commented out (starting with `#`) are activated automatically when you
+`set` that key.
+
+---
+
+#### Tunnel architecture
+
+The tunnel uses an outbound WebSocket to the HelloJohn Cloud relay — the local
+machine opens the connection, so **no inbound firewall rules or port forwarding are
+needed**.
+
+```
+Browser / Cloud Panel
+        │  HTTP request
+        ▼
+HelloJohn Cloud (relay WebSocket server)
+        │  frames over WebSocket
+        ▼
+_tunnel-worker (outbound WebSocket client, runs locally)
+        │  HTTP forward
+        ▼
+hellojohn (local server, http://localhost:8080)
+        │  HTTP response
+        ▲─────────────────────────────────────────
+```
+
+The worker:
+- Reconnects automatically with exponential back-off (1 s → 30 s max) on disconnect.
+- Forwards requests concurrently (each request runs in its own goroutine, response is
+  enqueued back over a single write channel to avoid WebSocket frame interleaving).
+- Updates `tunnel.state.json` on connect/disconnect, which `status` reads.
+- The tunnel token (`hjtun_...`) is passed to the worker via environment variable,
+  never via command-line arguments (not visible in `ps aux`).
+
+---
+
+#### Environment variables for local runtime
+
+| Variable | Description |
+|----------|-------------|
+| `HELLOJOHN_TUNNEL_TOKEN` | Tunnel token issued by HelloJohn Cloud. Starts with `hjtun_`. |
+| `HELLOJOHN_CLOUD_URL` | HelloJohn Cloud base URL (e.g. `https://cloud.hellojohn.com`). |
+| `BASE_URL` | Backend base URL — used as the OIDC issuer and in email links. |
+| `SIGNING_MASTER_KEY` | JWT signing master key (hex, 64 chars). Auto-generated by `init`. |
+| `SECRETBOX_MASTER_KEY` | Encryption key for secrets at rest (base64, 32 bytes). Auto-generated. |
+
+All other standard HelloJohn env vars (`APP_ENV`, `CORS_ORIGINS`, `FS_ROOT`, etc.)
+are also supported in the profile file — see the [Configuration](#configuration)
+section in the main README.
+
+---
+
 ## Examples
 
 ### Bootstrap a new instance
@@ -766,4 +1158,47 @@ hjctl user set-password --tenant acme $USER_UUID --password $(openssl rand -base
 ```bash
 hjctl session revoke-all --tenant acme
 echo "All sessions revoked for tenant acme."
+```
+
+### Run a local instance and connect it to the cloud tunnel
+
+```bash
+# First time: initialise a profile (generates keys automatically)
+hjctl local init
+
+# Store tunnel settings in the profile so you never pass flags again
+hjctl local env set HELLOJOHN_CLOUD_URL=https://cloud.hellojohn.com
+hjctl local env set HELLOJOHN_TUNNEL_TOKEN=hjtun_...
+
+# Start the server
+hjctl local start
+
+# Connect to the cloud relay
+hjctl local connect
+
+# Check everything at a glance
+hjctl local status
+
+# Follow tunnel logs
+hjctl local tunnel logs --follow
+
+# Stop just the tunnel
+hjctl local tunnel stop
+
+# Stop everything
+hjctl local stop
+```
+
+### Scripted CI setup (headless)
+
+```bash
+# Start server and verify health before running tests
+hjctl local start
+hjctl local status
+
+# Run your test suite
+go test ./...
+
+# Teardown
+hjctl local stop
 ```
