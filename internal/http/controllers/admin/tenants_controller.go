@@ -526,6 +526,9 @@ func mapTenantError(err error) *httperrors.AppError {
 		return httperrors.ErrNotFound.WithDetail("tenant not found")
 	case errors.Is(err, repository.ErrInvalidInput):
 		return httperrors.ErrBadRequest.WithDetail(err.Error())
+	case strings.Contains(strings.ToLower(errMsg), "already exists") ||
+		strings.Contains(strings.ToLower(errMsg), "duplicate key"):
+		return httperrors.ErrConflict.WithDetail(err.Error())
 	case errors.Is(err, store.ErrPreconditionFailed):
 		return httperrors.ErrPreconditionFailed
 	case errors.Is(err, store.ErrNotLeader):
