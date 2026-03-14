@@ -87,6 +87,9 @@ func main() {
 
 	log.Printf("Starting Server on %s", v2Addr)
 
+	// Load global config (reads env vars; safe to call before BuildV2HandlerWithDeps).
+	globalCfg := v2server.LoadGlobalConfig()
+
 	// Build V2 handler and dependencies
 	v2h, v2cleanup, dal, err := v2server.BuildV2HandlerWithDeps()
 	if err != nil {
@@ -98,18 +101,16 @@ func main() {
 		}
 	}()
 
-	// Admin Bootstrap: Check if admin users exist, prompt if needed
+	// Admin Bootstrap: non-blocking — uses env vars or auto-generates credentials.
 	if bootstrap.ShouldRunBootstrap(ctx, dal) {
-		log.Print("\n               ,      \t\n     __  _.-´´` `'-.   \n    /||\\'._ __{}_(\t\n    ||||  |'--.__\\   \t\n    |  L.(   ^_\\^\t   \t\n    \\ .-' |   _ |\t    \n    | |   )\\___/\t    \n    |  \\-'`:._]\t    \n    \\__/;      '-.\t")
-
 		if err := bootstrap.CheckAndCreateAdmin(ctx, bootstrap.AdminBootstrapConfig{
-			DAL: dal,
+			DAL:           dal,
+			AdminEmail:    globalCfg.AdminBootstrapEmail,
+			AdminPassword: globalCfg.AdminBootstrapPassword,
+			FSRoot:        globalCfg.FSRoot,
 		}); err != nil {
-			log.Printf("   Admin bootstrap failed: %v", err)
-			log.Println("   You can create an admin user later using: ./hellojohn admin:create")
+			log.Printf("Admin bootstrap warning: %v", err)
 		}
-
-		log.Print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	}
 
 	log.Printf("✅ V2 Server ready at %s", v2Addr)

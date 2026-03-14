@@ -294,6 +294,20 @@ func newLocalStatusCmd() *cobra.Command {
 			} else {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Tunnel : stopped")
 			}
+
+			// Warn if the auto-generated credentials file still exists.
+			envValues, _ := localruntime.LoadProfile(profile)
+			fsRoot := strings.TrimSpace(envValues["FS_ROOT"])
+			if fsRoot == "" {
+				fsRoot = "data"
+			}
+			credPath := filepath.Join(fsRoot, "initial-credentials.txt")
+			if _, statErr := os.Stat(credPath); statErr == nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "")
+				fmt.Fprintln(cmd.OutOrStdout(), "  ⚠  Initial admin credentials file found: "+credPath)
+				fmt.Fprintln(cmd.OutOrStdout(), "     Log in and delete this file once you have set a secure password.")
+			}
+
 			return nil
 		},
 	}

@@ -123,10 +123,28 @@ It implements the full **OAuth2 + OpenID Connect** specification, supports **9 s
 
 ### Prerequisites
 
-- **Go 1.21+**
 - A PostgreSQL or MySQL database for each tenant (the Control Plane itself needs no DB)
+- For Option A: Node.js 18+
+- For Option C: Go 1.21+
 
-### Option A — Docker (fastest)
+### Option A — npx (recommended)
+
+No installation required. One command downloads the binaries, generates keys, and starts the server:
+
+```bash
+npx hellojohn-oss quickstart
+```
+
+Or install globally and run:
+
+```bash
+npm install -g hellojohn-oss
+hellojohn-oss quickstart
+```
+
+See [`npm-installer/`](npm-installer/) for the full reference — commands, flags, air-gapped installs, and troubleshooting.
+
+### Option B — Docker
 
 ```bash
 docker run \
@@ -138,7 +156,7 @@ docker run \
   ghcr.io/dropdatabas3/hellojohn:latest
 ```
 
-### Option B — Build from source
+### Option C — Build from source
 
 ```bash
 git clone https://github.com/dropDatabas3/hellojohn.git
@@ -585,6 +603,54 @@ settings:
     protect_login: true
     protect_registration: true
 ```
+
+---
+
+## npm / npx installer (`hellojohn-oss`)
+
+The `hellojohn-oss` npm package is the recommended way to install and run HelloJohn locally. It is a zero-dependency runtime downloader: it fetches the pre-compiled `hellojohn` and `hjctl` binaries from GitHub Releases and places them in `~/.hellojohn/bin`.
+
+### One-command quickstart
+
+```bash
+npx hellojohn-oss quickstart
+```
+
+This chains setup → `hjctl local init` → `hjctl local start` automatically.
+
+### Standard flow
+
+```bash
+# Download and install binaries
+npx hellojohn-oss
+
+# Initialize config (auto-generates cryptographic keys)
+hjctl local init
+
+# Start the server
+hjctl local start
+```
+
+### Other commands
+
+| Command | Description |
+|---------|-------------|
+| `npx hellojohn-oss` / `npx hellojohn-oss setup` | Download and install binaries |
+| `npx hellojohn-oss quickstart` | One-command onboarding |
+| `npx hellojohn-oss doctor` | Validate installation |
+| `npx hellojohn-oss update` | Re-download latest binaries |
+| `npx hellojohn-oss uninstall` | Remove binaries |
+| `npx hellojohn-oss hjctl <args>` | Proxy to `hjctl` (useful before PATH is active) |
+
+### Install locations
+
+| Path | Contents |
+|------|----------|
+| `~/.hellojohn/bin/` | `hellojohn` and `hjctl` binaries |
+| `~/.hellojohn/env/default.env` | Default config profile |
+| `~/.hellojohn/run/` | PID files, state, and logs |
+
+For the full reference — flags, air-gapped installs, CI usage, troubleshooting — see [`npm-installer/README.md`](npm-installer/README.md).
 
 ---
 

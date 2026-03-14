@@ -158,6 +158,12 @@ type GlobalConfig struct {
 	AdminSeedEmail    string // ADMIN_SEED_EMAIL
 	AdminSeedPassword string // ADMIN_SEED_PASSWORD
 
+	// Admin bootstrap (FS mode + DB mode) — funciona sin Global Control Plane.
+	// Si está seteado, el servidor crea el primer admin en el arranque (idempotente).
+	// Generado automáticamente por hjctl local init; también se puede setear en Docker/CI.
+	AdminBootstrapEmail    string // HELLOJOHN_ADMIN_EMAIL
+	AdminBootstrapPassword string // HELLOJOHN_ADMIN_PASSWORD
+
 	// Global Data Plane (Shared DB con RLS)
 	GlobalDataPlaneDSN          string // GLOBAL_DATA_PLANE_DSN
 	GlobalDataPlaneMaxOpenConns int    // GLOBAL_DATA_PLANE_MAX_OPEN_CONNS (default 25)
@@ -379,6 +385,8 @@ func LoadGlobalConfig() GlobalConfig {
 	globalControlPlaneDriver := getenvStringFirst([]string{"GLOBAL_CONTROL_PLANE_DRIVER", "GLOBAL_DB_DRIVER"}, "pg")
 	adminSeedEmail := strings.TrimSpace(os.Getenv("ADMIN_SEED_EMAIL"))
 	adminSeedPassword := strings.TrimSpace(os.Getenv("ADMIN_SEED_PASSWORD"))
+	adminBootstrapEmail := strings.TrimSpace(os.Getenv("HELLOJOHN_ADMIN_EMAIL"))
+	adminBootstrapPassword := strings.TrimSpace(os.Getenv("HELLOJOHN_ADMIN_PASSWORD"))
 
 	// Global Data Plane (EPIC GDP)
 	gdpDSN := strings.TrimSpace(os.Getenv("GLOBAL_DATA_PLANE_DSN"))
@@ -527,6 +535,8 @@ func LoadGlobalConfig() GlobalConfig {
 		GlobalControlPlaneDriver: globalControlPlaneDriver,
 		AdminSeedEmail:           adminSeedEmail,
 		AdminSeedPassword:        adminSeedPassword,
+		AdminBootstrapEmail:      adminBootstrapEmail,
+		AdminBootstrapPassword:   adminBootstrapPassword,
 
 		CloudOIDCIssuer:       cloudOIDCIssuer,
 		CloudOIDCClientID:     cloudOIDCClientID,
