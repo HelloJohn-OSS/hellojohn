@@ -6,7 +6,7 @@
 > Built for developers who want full control without operational complexity.
 
 ![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat&logo=go)
-![License](https://img.shields.io/badge/license-MIT-blue?style=flat)
+![License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat)
 ![Status](https://img.shields.io/badge/status-stable-brightgreen?style=flat)
 
 ---

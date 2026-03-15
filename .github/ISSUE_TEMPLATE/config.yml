@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: HelloJohn Cloud support
+    url: https://hellojohn.io/support
+    about: For issues with the Cloud product, managed tunnel, or billing
+  - name: Documentation
+    url: https://hellojohn.io/docs
+    about: Installation guides, API reference, and tutorials
+  - name: Discussions
+    url: https://github.com/HelloJohn-OSS/hellojohn/discussions
+    about: Questions, ideas, and general discussion
