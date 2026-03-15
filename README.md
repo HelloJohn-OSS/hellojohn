@@ -442,6 +442,83 @@ Supported providers: `google`, `github`, `microsoft`, `discord`, `facebook`, `li
 
 ---
 
+## API Keys
+
+API keys are long-lived credentials for server-to-server access to the admin API. Unlike JWT access tokens (short-lived, user-bound), API keys are static tokens you create once and inject into services or scripts.
+
+### Scopes
+
+| Scope | Token prefix | Access |
+| :--- | :--- | :--- |
+| `admin` | `hj_admin_` | Full admin API — tenants, users, clients, roles, keys |
+| `readonly` | `hj_ro_` | Read-only access to the admin API |
+| `cloud` | `hj_cloud_` | Authorizes the HelloJohn Cloud proxy to forward requests to this instance |
+| `tenant:{slug}` | `hj_t_{slug}_` | Scoped to a single tenant's admin endpoints |
+
+### Creating a key
+
+**Via hjctl (recommended):**
+
+```bash
+# Log in first
+hjctl auth login
+
+# Create an admin key
+hjctl api-key create --name "my-service" --scope admin
+
+# Create a cloud key (for cloud proxy connection)
+hjctl api-key create --name "cloud-proxy" --scope cloud
+
+# Create a read-only key with expiration
+hjctl api-key create --name "monitoring" --scope readonly --expires-in 720h
+```
+
+> The raw token is shown **once** at creation time. Save it immediately — it cannot be retrieved afterwards.
+
+**Via API:**
+
+```bash
+curl -X POST https://auth.example.com/v2/admin/api-keys \
+  -H "Authorization: Bearer <admin_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-service", "scope": "admin"}'
+```
+
+### Using a key
+
+Pass the key in the `X-API-Key` header on any admin API request:
+
+```bash
+curl https://auth.example.com/v2/admin/tenants \
+  -H "X-API-Key: hj_admin_xxxxxxxxxxxx"
+```
+
+### Cloud proxy connection
+
+When you register a self-hosted instance in HelloJohn Cloud, the cloud panel proxies admin requests to your instance on your behalf. This proxy authenticates using a `cloud`-scoped API key stored encrypted in the cloud.
+
+```bash
+# 1. Create the cloud-scoped key on your instance
+hjctl api-key create --name "hellojohn-cloud" --scope cloud
+# → prints: hj_cloud_xxxxxxxxxxxx  (save this)
+
+# 2. Register your instance in HelloJohn Cloud and paste the key
+#    Settings → Instances → Add Instance → API Key
+```
+
+When `hjctl local start` is used with tunnel mode, the API key is **auto-provisioned** — `hjctl` logs in with your profile credentials, creates an `admin`-scoped key, and saves it to `~/.hjctl/config.yaml`. The tunnel worker then injects it automatically on every forwarded request.
+
+### Managing keys
+
+```bash
+hjctl api-key list                   # List all keys
+hjctl api-key get <id>               # Get key details
+hjctl api-key rotate --force <id>    # Rotate (invalidates old key immediately)
+hjctl api-key revoke --force <id>    # Permanently revoke
+```
+
+---
+
 ## SDKs
 
 All SDKs live in [`HelloJohn-OSS/SDKs`](https://github.com/HelloJohn-OSS/SDKs) and target `/v2/*` API routes.
