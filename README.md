@@ -153,7 +153,7 @@ docker run \
   -e BASE_URL=http://localhost:8080 \
   -e FS_ADMIN_ENABLE=true \
   -p 8080:8080 \
-  ghcr.io/dropdatabas3/hellojohn:latest
+  ghcr.io/hellojohn-oss/hellojohn:latest
 ```
 
 ### Option C — Build from source
