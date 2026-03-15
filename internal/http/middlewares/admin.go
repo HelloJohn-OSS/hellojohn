@@ -256,6 +256,10 @@ func RequireAdminAuthOrAPIKey(issuer *jwtx.Issuer, apiKeyRepo repository.APIKeyR
 				if slug := key.TenantSlug(); slug != "" {
 					adminType = "tenant"
 					tenants = []jwtx.TenantAccessClaim{{Slug: slug, Role: "owner"}}
+				} else {
+					// Global admin/cloud keys: grant wildcard tenant access so that
+					// filterTenantsByAdminClaims returns all tenants instead of [].
+					tenants = []jwtx.TenantAccessClaim{{Slug: "*", Role: "owner"}}
 				}
 
 				syntheticClaims := &jwtx.AdminAccessClaims{
