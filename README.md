@@ -142,7 +142,7 @@ npm install -g hellojohn-oss
 hellojohn-oss quickstart
 ```
 
-See [`npm-installer/`](npm-installer/) for the full reference — commands, flags, air-gapped installs, and troubleshooting.
+See [`hellojohn-npm-installer`](https://github.com/HelloJohn-OSS/hellojohn-npm-installer) for the full reference — commands, flags, air-gapped installs, and troubleshooting.
 
 ### Option B — Docker
 
@@ -159,7 +159,7 @@ docker run \
 ### Option C — Build from source
 
 ```bash
-git clone https://github.com/dropDatabas3/hellojohn.git
+git clone https://github.com/HelloJohn-OSS/hellojohn.git
 cd hellojohn
 
 # Generate required keys
@@ -444,7 +444,7 @@ Supported providers: `google`, `github`, `microsoft`, `discord`, `facebook`, `li
 
 ## SDKs
 
-All SDKs live in [`sdks/`](sdks/) and target `/v2/*` API routes.
+All SDKs live in [`HelloJohn-OSS/SDKs`](https://github.com/HelloJohn-OSS/SDKs) and target `/v2/*` API routes.
 
 | SDK | Package | Platform | Status |
 | :--- | :--- | :--- | :--- |
@@ -453,7 +453,7 @@ All SDKs live in [`sdks/`](sdks/) and target `/v2/*` API routes.
 | Vue | `@hellojohn/vue` | Vue 3, Nuxt 3 | ✅ Stable |
 | React Native | `@hellojohn/react-native` | Expo, RN 0.73+ | ✅ Stable |
 | Node.js | `@hellojohn/node` | Express, Fastify, Node APIs | ✅ Stable |
-| Go | `github.com/dropDatabas3/hellojohn-go` | Go 1.21+ | ✅ Stable |
+| Go | `github.com/HelloJohn-OSS/SDKs/go` | Go 1.21+ | ✅ Stable |
 | Python | `hellojohn` (PyPI) | FastAPI, Flask, Python 3.10+ | ✅ Stable |
 
 ### Quickstart Examples
@@ -482,7 +482,7 @@ export default function Root() {
 
 **Go (server-side middleware)**
 ```go
-import hellojohn "github.com/dropDatabas3/hellojohn-go"
+import hellojohn "github.com/HelloJohn-OSS/SDKs/go"
 
 client, _ := hellojohn.New(hellojohn.Config{
     Domain: "https://auth.example.com",
@@ -517,7 +517,7 @@ def data(claims: TokenClaims = Depends(require_auth(verifier))):
     return {"user": claims.sub}
 ```
 
-See [`sdks/examples/`](sdks/examples/) for complete end-to-end examples per platform.
+See [`SDKs/examples/`](https://github.com/HelloJohn-OSS/SDKs/tree/main/examples) for complete end-to-end examples per platform.
 
 ---
 
@@ -549,7 +549,7 @@ hellojohn/
 ├── migrations/
 │   ├── postgres/tenant/             # PostgreSQL tenant schema migrations
 │   └── mysql/tenant/                # MySQL tenant schema migrations
-├── sdks/                            # Client SDKs (JS, React, Vue, RN, Node, Go, Python)
+│   # SDKs live in https://github.com/HelloJohn-OSS/SDKs
 ├── data/hellojohn/                  # Default Control Plane FS root
 │   └── tenants/{slug}/
 │       ├── tenant.yaml
@@ -650,7 +650,7 @@ hjctl local start
 | `~/.hellojohn/env/default.env` | Default config profile |
 | `~/.hellojohn/run/` | PID files, state, and logs |
 
-For the full reference — flags, air-gapped installs, CI usage, troubleshooting — see [`npm-installer/README.md`](npm-installer/README.md).
+For the full reference — flags, air-gapped installs, CI usage, troubleshooting — see [`hellojohn-npm-installer`](https://github.com/HelloJohn-OSS/hellojohn-npm-installer#readme).
 
 ---
 
@@ -691,7 +691,7 @@ lifecycle, and all flags — see [`cmd/hjctl/README.md`](cmd/hjctl/README.md#loc
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feat/my-feature`
-3. Follow the patterns in [`CLAUDE.md`](.claude/CLAUDE.md) (architecture, naming, DAL usage)
+3. Follow the patterns in [CONTRIBUTING.md](.github/CONTRIBUTING.md) (architecture, naming, DAL usage)
 4. Run `go vet ./...` and `go test ./...`
 5. Open a pull request
 
@@ -707,7 +707,7 @@ lifecycle, and all flags — see [`cmd/hjctl/README.md`](cmd/hjctl/README.md#loc
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+AGPL-3.0 — see [LICENSE](LICENSE).
 
 ---
 
