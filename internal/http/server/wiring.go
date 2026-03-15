@@ -100,8 +100,6 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 			migJobRepo = pg.NewMigrationJobRepo(globalPool)
 			log.Printf("[wiring] global pool connected OK — billing/onboard/tunnel routes ACTIVE")
 		}
-	} else if globalCfg.GlobalControlPlaneDSN == "" {
-		log.Printf("[wiring] GLOBAL_CONTROL_PLANE_DSN not set — billing/onboard/tunnel routes will be UNAVAILABLE (set GLOBAL_CONTROL_PLANE_DSN to enable)")
 	}
 
 	// SA.1: Determinar migraciones de Global DB según el driver
