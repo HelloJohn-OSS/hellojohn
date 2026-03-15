@@ -24,6 +24,15 @@ func newLocalConnectCmd() *cobra.Command {
 		Short: "Connect local runtime to HelloJohn Cloud tunnel",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profile = localProfile(profile)
+
+			// Auto-detect the running server URL from saved state so that a
+			// port override (e.g. 8081 when 8080 was occupied) is respected.
+			// An explicit --base-url flag always takes precedence.
+			if !cmd.Flags().Changed("base-url") {
+				if serverState, err := localruntime.ReadState[localruntime.ServerState](localruntime.ServerStateFile()); err == nil && serverState.BaseURL != "" {
+					baseURL = serverState.BaseURL
+				}
+			}
 			if strings.TrimSpace(baseURL) == "" {
 				baseURL = "http://localhost:8080"
 			}
@@ -138,7 +147,9 @@ func newLocalConnectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&profile, "profile", defaultLocalProfile, "Local runtime profile name")
 	cmd.Flags().StringVar(&token, "token", "", "Tunnel token")
 	cmd.Flags().StringVar(&cloudURL, "cloud-url", "", "HelloJohn Cloud URL")
-	cmd.Flags().StringVar(&baseURL, "base-url", "http://localhost:8080", "Local server base URL")
+	// Default is empty so that Changed("base-url") reliably detects explicit use.
+	// When not set, RunE reads the port from the saved server state file.
+	cmd.Flags().StringVar(&baseURL, "base-url", "", "Local server base URL (default: auto-detected from running server state)")
 	return cmd
 }
 

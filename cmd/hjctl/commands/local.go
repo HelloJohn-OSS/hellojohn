@@ -560,7 +560,12 @@ func bootstrapLocalAPIKey(out io.Writer, baseURL, profile string) {
 	}
 
 	// Persist to ~/.hjctl/config.yaml so localAPIKey() finds it via cfg.Load().
+	// Also persist BaseURL so commands like `hjctl auth login` work without
+	// requiring an explicit --base-url when the port differs from 8080.
 	c.APIKey = rawKey
+	if strings.TrimSpace(c.BaseURL) == "" {
+		c.BaseURL = base
+	}
 	_ = cfg.Save(c)
 
 	// Persist to profile env so the tunnel worker subprocess inherits it directly.
