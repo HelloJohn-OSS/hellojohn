@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dropDatabas3/hellojohn/cmd/hjctl/cfg"
 	"github.com/dropDatabas3/hellojohn/internal/localruntime"
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
@@ -257,6 +258,17 @@ func readTunnelLoop(ctx context.Context, conn *websocket.Conn, localURL string, 
 	}
 }
 
+// localAPIKey returns the admin API key for the local HelloJohn server.
+// It checks (in order): the HELLOJOHN_API_KEY env var (which the tunnel worker
+// inherits from the local profile), then falls back to ~/.hjctl/config.yaml.
+func localAPIKey() string {
+	if key := strings.TrimSpace(os.Getenv("HELLOJOHN_API_KEY")); key != "" {
+		return key
+	}
+	c, _ := cfg.Load()
+	return strings.TrimSpace(c.APIKey)
+}
+
 func forwardToLocal(client *http.Client, localURL string, req tunnelReq) tunnelResp {
 	target := strings.TrimRight(localURL, "/") + "/" + strings.TrimLeft(req.Path, "/")
 	if req.Query != "" {
@@ -275,6 +287,17 @@ func forwardToLocal(client *http.Client, localURL string, req tunnelReq) tunnelR
 		for _, value := range vals {
 			httpReq.Header.Add(key, value)
 		}
+	}
+
+	// Strip the cloud panel's JWT from the Authorization header.
+	// The cloud JWT is valid for the cloud backend but not the local server;
+	// forwarding it would cause the local server to reject with 401.
+	// Admin routes on the local server use X-API-Key authentication instead.
+	httpReq.Header.Del("Authorization")
+
+	// Inject the local admin API key so admin routes accept the request.
+	if apiKey := localAPIKey(); apiKey != "" {
+		httpReq.Header.Set("X-API-Key", apiKey)
 	}
 
 	resp, err := client.Do(httpReq)

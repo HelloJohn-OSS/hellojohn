@@ -1,6 +1,9 @@
 package metrics
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"net/http"
 	"time"
 )
@@ -40,4 +43,35 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 		rw.written = true
 	}
 	return rw.ResponseWriter.Write(b)
+}
+
+// Preserve optional interfaces required by upgrades/streaming (e.g. WebSocket).
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		conn, readWriter, err := http.NewResponseController(rw.ResponseWriter).Hijack()
+		if err != nil {
+			return nil, nil, fmt.Errorf("response writer %T does not support hijack: %w", rw.ResponseWriter, err)
+		}
+		return conn, readWriter, nil
+	}
+	return hj.Hijack()
+}
+
+// Unwrap lets http.ResponseController traverse wrapped writers.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+func (rw *responseWriter) Flush() {
+	if fl, ok := rw.ResponseWriter.(http.Flusher); ok {
+		fl.Flush()
+	}
+}
+
+func (rw *responseWriter) Push(target string, opts *http.PushOptions) error {
+	if p, ok := rw.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
 }

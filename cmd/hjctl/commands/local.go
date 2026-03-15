@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dropDatabas3/hellojohn/cmd/hjctl/cfg"
 	"github.com/dropDatabas3/hellojohn/internal/localruntime"
 	"github.com/spf13/cobra"
 )
@@ -181,6 +184,10 @@ func newLocalStartCmd() *cobra.Command {
 					"hjctl local logs --tail 50",
 				)
 			}
+
+			// Provision an admin API key if one is not already configured.
+			// The tunnel worker needs it to authenticate requests to the local server.
+			bootstrapLocalAPIKey(cmd.OutOrStdout(), baseURL, profile)
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Server started (pid %d) at %s\n", pid, baseURL)
 			steps := []string{
@@ -478,6 +485,88 @@ func mapToEnv(values map[string]string) []string {
 		out = append(out, fmt.Sprintf("%s=%s", key, values[key]))
 	}
 	return out
+}
+
+// bootstrapLocalAPIKey provisions an admin API key for the running server if none
+// is configured. It authenticates with the admin credentials from the profile and
+// stores the generated key in:
+//   - ~/.hjctl/config.yaml  (read by localAPIKey() as fallback)
+//   - profile env HELLOJOHN_API_KEY  (inherited by the tunnel worker subprocess)
+//
+// Failures are non-fatal — the user can provision a key manually via:
+//
+//	hjctl admin api-keys create --scope admin
+//	hjctl config set api-key <token>
+func bootstrapLocalAPIKey(out io.Writer, baseURL, profile string) {
+	// Skip if already configured.
+	if key := strings.TrimSpace(os.Getenv("HELLOJOHN_API_KEY")); key != "" {
+		return
+	}
+	c, _ := cfg.Load()
+	if strings.TrimSpace(c.APIKey) != "" {
+		return
+	}
+	profileValues, err := localruntime.LoadProfile(profile)
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(profileValues["HELLOJOHN_API_KEY"]) != "" {
+		return
+	}
+	email := strings.TrimSpace(profileValues["HELLOJOHN_ADMIN_EMAIL"])
+	password := strings.TrimSpace(profileValues["HELLOJOHN_ADMIN_PASSWORD"])
+	if email == "" || password == "" {
+		return
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	base := strings.TrimRight(baseURL, "/")
+
+	// Step 1: login with admin credentials to get a short-lived JWT.
+	loginBody, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	loginResp, err := client.Post(base+"/v2/admin/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil || loginResp.StatusCode != http.StatusOK {
+		return
+	}
+	defer loginResp.Body.Close()
+	var loginResult struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginResult); err != nil || loginResult.AccessToken == "" {
+		return
+	}
+
+	// Step 2: create a non-expiring admin API key.
+	keyBody, _ := json.Marshal(map[string]string{"name": "hjctl-local", "scope": "admin"})
+	keyReq, _ := http.NewRequest(http.MethodPost, base+"/v2/admin/api-keys", bytes.NewReader(keyBody))
+	keyReq.Header.Set("Content-Type", "application/json")
+	keyReq.Header.Set("Authorization", "Bearer "+loginResult.AccessToken)
+	keyResp, err := client.Do(keyReq)
+	if err != nil || keyResp.StatusCode != http.StatusCreated {
+		return
+	}
+	defer keyResp.Body.Close()
+	var keyResult struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(keyResp.Body).Decode(&keyResult); err != nil {
+		return
+	}
+	rawKey := strings.TrimSpace(keyResult.Data.Token)
+	if rawKey == "" {
+		return
+	}
+
+	// Persist to ~/.hjctl/config.yaml so localAPIKey() finds it via cfg.Load().
+	c.APIKey = rawKey
+	_ = cfg.Save(c)
+
+	// Persist to profile env so the tunnel worker subprocess inherits it directly.
+	_ = localruntime.WriteProfile(profile, map[string]string{"HELLOJOHN_API_KEY": rawKey})
+
+	fmt.Fprintln(out, "  API key provisioned for tunnel authentication.")
 }
 
 // hellojohnBinary resolves the server binary path.
