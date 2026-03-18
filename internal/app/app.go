@@ -1,6 +1,7 @@
 package appv2
 
 import (
+	"context"
 	"embed"
 	"net/http"
 	"time"
@@ -141,6 +142,27 @@ type Deps struct {
 	BotProtection              botpkg.BotProtectionService
 	PasswordPolicyGlobalTenant string
 	PasswordPolicyEnv          *repository.SecurityPolicy
+
+	// ─── Health ───
+	// GlobalDBCheck es el ping a la DB global (nil en modo FS-only).
+	GlobalDBCheck func(ctx context.Context) error
+}
+
+// managerPoolAdapter adapts store.DataAccessLayer.Stats() to the
+// TenantPoolStats interface expected by the health service.
+// The store pool tracks one connection per tenant DB; Acquired/Idle
+// are not tracked at this level so Total=1 per active tenant connection.
+type managerPoolAdapter struct {
+	dal store.DataAccessLayer
+}
+
+func (a *managerPoolAdapter) Stats() map[string]healthsvc.PoolStat {
+	fs := a.dal.Stats()
+	out := make(map[string]healthsvc.PoolStat, len(fs.Connections))
+	for slug := range fs.Connections {
+		out[slug] = healthsvc.PoolStat{Total: 1}
+	}
+	return out
 }
 
 // App represents the wired V2 application.
@@ -212,6 +234,8 @@ func New(cfg Config, deps Deps) (*App, error) {
 		HealthDeps: healthsvc.Deps{
 			ControlPlane: deps.ControlPlane,
 			Issuer:       deps.Issuer,
+			DBCheck:      deps.GlobalDBCheck,
+			TenantPools:  &managerPoolAdapter{dal: deps.DAL},
 		},
 		// Audit
 		AuditBus: deps.AuditBus,

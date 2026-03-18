@@ -17,9 +17,11 @@ type HealthRouterDeps struct {
 func RegisterHealthRoutes(mux *http.ServeMux, deps HealthRouterDeps) {
 	c := deps.Controllers
 
-	// GET /readyz - health check público
+	// GET /ping - liveness probe mínima (proceso vivo = 200 OK)
+	mux.Handle("/ping", healthBaseHandler(http.HandlerFunc(c.Health.Ping)))
+	// GET /readyz - readiness probe completa (componentes + DB + keystore)
 	mux.Handle("/readyz", healthBaseHandler(http.HandlerFunc(c.Health.Readyz)))
-	// GET /health - legacy alias kept for backward compatibility in integrations.
+	// GET /health - alias de /readyz para compatibilidad con plataformas (Railway, k8s, etc.)
 	mux.Handle("/health", healthBaseHandler(http.HandlerFunc(c.Health.Readyz)))
 }
 

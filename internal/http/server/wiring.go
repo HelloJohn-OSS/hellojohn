@@ -492,6 +492,13 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 		// Password Policy fallback chain
 		PasswordPolicyGlobalTenant: globalCfg.PasswordPolicyGlobalTenant,
 		PasswordPolicyEnv:          globalCfg.PasswordPolicyEnv,
+		// Health — DB ping (nil en FS-only)
+		GlobalDBCheck: func() func(context.Context) error {
+			if globalPool != nil {
+				return globalPool.Ping
+			}
+			return nil
+		}(),
 	}
 
 	// SA.2: System Management — instanciar service + controllers

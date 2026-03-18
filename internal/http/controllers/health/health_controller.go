@@ -63,6 +63,13 @@ func (c *HealthController) Readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, statusCode, response)
 }
 
+// Ping maneja GET /ping — liveness probe mínima, sin checks internos.
+func (c *HealthController) Ping(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+}
+
 func writeJSON(w http.ResponseWriter, status int, v dto.HealthResponse) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
