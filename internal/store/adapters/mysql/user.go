@@ -4,8 +4,9 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
-	"sort"
+	"log"
 	"strings"
 	"time"
 
@@ -21,12 +22,12 @@ var _ repository.UserRepository = (*userRepo)(nil)
 // GetByEmail busca un usuario por email con su identidad password.
 func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*repository.User, *repository.Identity, error) {
 	const query = `
-		SELECT u.id, u.email, u.email_verified, COALESCE(u.name, ''), 
+		SELECT u.id, u.email, u.email_verified, COALESCE(u.name, ''),
 		       COALESCE(u.given_name, ''), COALESCE(u.family_name, ''),
-		       COALESCE(u.picture, ''), COALESCE(u.locale, ''), 
-		       COALESCE(u.language, ''), u.source_client_id, u.created_at, u.metadata,
+		       COALESCE(u.picture, ''), COALESCE(u.locale, ''),
+		       COALESCE(u.language, ''), u.source_client_id, u.created_at, u.metadata, u.custom_data,
 		       u.disabled_at, u.disabled_until, u.disabled_reason,
-		       i.id, i.provider, i.provider_user_id, i.email, 
+		       i.id, i.provider, i.provider_user_id, i.email,
 		       i.email_verified, i.password_hash, i.created_at
 		FROM app_user u
 		LEFT JOIN identity i ON i.user_id = u.id AND i.provider = 'password'
@@ -38,6 +39,7 @@ func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*rep
 	var identity repository.Identity
 	var pwdHash sql.NullString
 	var metadata []byte
+	var customData []byte
 	var sourceClientID sql.NullString
 	var disabledAt, disabledUntil sql.NullTime
 	var disabledReason sql.NullString
@@ -54,7 +56,7 @@ func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*rep
 		&user.ID, &user.Email, &user.EmailVerified,
 		&user.Name, &user.GivenName, &user.FamilyName,
 		&user.Picture, &user.Locale, &user.Language,
-		&sourceClientID, &user.CreatedAt, &metadata,
+		&sourceClientID, &user.CreatedAt, &metadata, &customData,
 		&disabledAt, &disabledUntil, &disabledReason,
 		&identityID, &identityProvider, &identityProviderUID,
 		&identityEmail, &identityEmailVerified, &pwdHash, &identityCreatedAt,
@@ -71,6 +73,12 @@ func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*rep
 	user.DisabledAt = nullTimeToPtr(disabledAt)
 	user.DisabledUntil = nullTimeToPtr(disabledUntil)
 	user.DisabledReason = nullStringToPtr(disabledReason)
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &user.Metadata); err != nil {
+			log.Printf("WARN: mysql: json.Unmarshal metadata for user %s: %v", user.Email, err)
+		}
+	}
+	user.CustomFields = mysqlUnmarshalCustomData(customData)
 
 	// Build identity if exists
 	if identityID.Valid {
@@ -88,147 +96,71 @@ func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*rep
 		}
 	}
 
+	// Social-only users have no password identity row — return nil identity
+	if !identityID.Valid {
+		return &user, nil, nil
+	}
+
 	return &user, &identity, nil
 }
 
 // GetByID obtiene un usuario por su ID.
 func (r *userRepo) GetByID(ctx context.Context, userID string) (*repository.User, error) {
-	// Usamos query dinámica para obtener custom fields
-	const query = `SELECT * FROM app_user WHERE id = ?`
+	const query = `
+		SELECT id, email, email_verified, COALESCE(name, ''),
+		       COALESCE(given_name, ''), COALESCE(family_name, ''),
+		       COALESCE(picture, ''), COALESCE(locale, ''),
+		       COALESCE(language, ''), source_client_id, created_at, metadata, custom_data,
+		       disabled_at, disabled_until, disabled_reason
+		FROM app_user WHERE id = ?
+	`
 
-	rows, err := r.db.QueryContext(ctx, query, userID)
+	var user repository.User
+	var metadata []byte
+	var customData []byte
+	var sourceClientID sql.NullString
+	var disabledAt, disabledUntil sql.NullTime
+	var disabledReason sql.NullString
+
+	err := r.db.QueryRowContext(ctx, query, userID).Scan(
+		&user.ID, &user.Email, &user.EmailVerified,
+		&user.Name, &user.GivenName, &user.FamilyName,
+		&user.Picture, &user.Locale, &user.Language,
+		&sourceClientID, &user.CreatedAt, &metadata, &customData,
+		&disabledAt, &disabledUntil, &disabledReason,
+	)
+	if err == sql.ErrNoRows {
+		return nil, repository.ErrNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("mysql: get user by id: %w", err)
 	}
-	defer rows.Close()
 
-	if !rows.Next() {
-		return nil, repository.ErrNotFound
-	}
-
-	user, err := r.scanUserRow(rows)
-	if err != nil {
-		return nil, fmt.Errorf("mysql: scan user: %w", err)
-	}
-
-	return user, nil
-}
-
-// scanUserRow escanea una fila con columnas dinámicas.
-func (r *userRepo) scanUserRow(rows *sql.Rows) (*repository.User, error) {
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-
-	vals := make([]any, len(cols))
-	for i := range vals {
-		vals[i] = new(any)
-	}
-
-	if err := rows.Scan(vals...); err != nil {
-		return nil, err
-	}
-
-	var user repository.User
-	user.CustomFields = make(map[string]any)
-
-	for i, colName := range cols {
-		val := *(vals[i].(*any))
-		if val == nil {
-			continue
-		}
-
-		switch colName {
-		case "id":
-			if s, ok := val.(string); ok {
-				user.ID = s
-			} else if b, ok := val.([]byte); ok {
-				user.ID = string(b)
-			}
-		case "email":
-			if s, ok := val.(string); ok {
-				user.Email = s
-			} else if b, ok := val.([]byte); ok {
-				user.Email = string(b)
-			}
-		case "email_verified":
-			if v, ok := val.(bool); ok {
-				user.EmailVerified = v
-			} else if v, ok := val.(int64); ok {
-				user.EmailVerified = v == 1
-			}
-		case "name":
-			if s, ok := val.(string); ok {
-				user.Name = s
-			} else if b, ok := val.([]byte); ok {
-				user.Name = string(b)
-			}
-		case "given_name":
-			if s, ok := val.(string); ok {
-				user.GivenName = s
-			} else if b, ok := val.([]byte); ok {
-				user.GivenName = string(b)
-			}
-		case "family_name":
-			if s, ok := val.(string); ok {
-				user.FamilyName = s
-			} else if b, ok := val.([]byte); ok {
-				user.FamilyName = string(b)
-			}
-		case "picture":
-			if s, ok := val.(string); ok {
-				user.Picture = s
-			} else if b, ok := val.([]byte); ok {
-				user.Picture = string(b)
-			}
-		case "locale":
-			if s, ok := val.(string); ok {
-				user.Locale = s
-			} else if b, ok := val.([]byte); ok {
-				user.Locale = string(b)
-			}
-		case "language":
-			if s, ok := val.(string); ok {
-				user.Language = s
-			} else if b, ok := val.([]byte); ok {
-				user.Language = string(b)
-			}
-		case "source_client_id":
-			if s, ok := val.(string); ok {
-				user.SourceClientID = &s
-			} else if b, ok := val.([]byte); ok {
-				s := string(b)
-				user.SourceClientID = &s
-			}
-		case "created_at":
-			if t, ok := val.(time.Time); ok {
-				user.CreatedAt = t
-			}
-		case "disabled_at":
-			if t, ok := val.(time.Time); ok {
-				user.DisabledAt = &t
-			}
-		case "disabled_until":
-			if t, ok := val.(time.Time); ok {
-				user.DisabledUntil = &t
-			}
-		case "disabled_reason":
-			if s, ok := val.(string); ok {
-				user.DisabledReason = &s
-			} else if b, ok := val.([]byte); ok {
-				s := string(b)
-				user.DisabledReason = &s
-			}
-		case "metadata", "profile", "status", "updated_at":
-			// Skip internal columns
-		default:
-			// Custom field
-			user.CustomFields[colName] = val
+	user.SourceClientID = nullStringToPtr(sourceClientID)
+	user.DisabledAt = nullTimeToPtr(disabledAt)
+	user.DisabledUntil = nullTimeToPtr(disabledUntil)
+	user.DisabledReason = nullStringToPtr(disabledReason)
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &user.Metadata); err != nil {
+			log.Printf("WARN: mysql: json.Unmarshal metadata for user %s: %v", user.ID, err)
 		}
 	}
+	user.CustomFields = mysqlUnmarshalCustomData(customData)
 
 	return &user, nil
+}
+
+// mysqlUnmarshalCustomData deserializes the custom_data JSON column into a map.
+// Returns an empty (non-nil) map on NULL or invalid JSON.
+func mysqlUnmarshalCustomData(data []byte) map[string]any {
+	result := make(map[string]any)
+	if len(data) == 0 {
+		return result
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return make(map[string]any)
+	}
+	return result
 }
 
 // List lista usuarios con filtros y paginación.
@@ -245,16 +177,20 @@ func (r *userRepo) List(ctx context.Context, tenantID string, filter repository.
 		offset = 0
 	}
 
+	const selectCols = `id, email, email_verified, COALESCE(name,''), COALESCE(given_name,''), COALESCE(family_name,''),
+		COALESCE(picture,''), COALESCE(locale,''), COALESCE(language,''),
+		source_client_id, created_at, metadata, custom_data,
+		disabled_at, disabled_until, disabled_reason`
+
 	var query string
 	var args []any
 
 	if filter.Search != "" {
-		// MySQL usa LIKE (case-insensitive con collation utf8mb4_unicode_ci)
-		query = `SELECT * FROM app_user WHERE (email LIKE ? OR name LIKE ?) ORDER BY created_at DESC LIMIT ? OFFSET ?`
+		query = `SELECT ` + selectCols + ` FROM app_user WHERE (email LIKE ? OR name LIKE ?) ORDER BY created_at DESC LIMIT ? OFFSET ?`
 		searchPattern := "%" + filter.Search + "%"
 		args = []any{searchPattern, searchPattern, limit, offset}
 	} else {
-		query = `SELECT * FROM app_user ORDER BY created_at DESC LIMIT ? OFFSET ?`
+		query = `SELECT ` + selectCols + ` FROM app_user ORDER BY created_at DESC LIMIT ? OFFSET ?`
 		args = []any{limit, offset}
 	}
 
@@ -266,12 +202,35 @@ func (r *userRepo) List(ctx context.Context, tenantID string, filter repository.
 
 	var users []repository.User
 	for rows.Next() {
-		user, err := r.scanUserRow(rows)
-		if err != nil {
+		var u repository.User
+		u.TenantID = tenantID
+		var metadata []byte
+		var customData []byte
+		var sourceClientID sql.NullString
+		var disabledAt, disabledUntil sql.NullTime
+		var disabledReason sql.NullString
+
+		if err := rows.Scan(
+			&u.ID, &u.Email, &u.EmailVerified,
+			&u.Name, &u.GivenName, &u.FamilyName,
+			&u.Picture, &u.Locale, &u.Language,
+			&sourceClientID, &u.CreatedAt, &metadata, &customData,
+			&disabledAt, &disabledUntil, &disabledReason,
+		); err != nil {
 			return nil, fmt.Errorf("mysql: scan user: %w", err)
 		}
-		user.TenantID = tenantID
-		users = append(users, *user)
+
+		u.SourceClientID = nullStringToPtr(sourceClientID)
+		u.DisabledAt = nullTimeToPtr(disabledAt)
+		u.DisabledUntil = nullTimeToPtr(disabledUntil)
+		u.DisabledReason = nullStringToPtr(disabledReason)
+		if len(metadata) > 0 {
+			if err := json.Unmarshal(metadata, &u.Metadata); err != nil {
+				log.Printf("WARN: mysql: json.Unmarshal metadata for user %s: %v", u.ID, err)
+			}
+		}
+		u.CustomFields = mysqlUnmarshalCustomData(customData)
+		users = append(users, u)
 	}
 
 	return users, rows.Err()
@@ -285,7 +244,6 @@ func (r *userRepo) Create(ctx context.Context, input repository.CreateUserInput)
 	}
 	defer tx.Rollback()
 
-	// Generate UUID for user
 	userID := uuid.New().String()
 	now := time.Now()
 
@@ -305,47 +263,31 @@ func (r *userRepo) Create(ctx context.Context, input repository.CreateUserInput)
 		user.SourceClientID = &input.SourceClientID
 	}
 
-	// Build dynamic INSERT query
-	cols := []string{"id", "email", "email_verified", "name", "given_name", "family_name", "picture", "locale", "source_client_id", "created_at"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
-	args := []any{
-		userID, user.Email, false,
-		nullIfEmpty(input.Name).String, nullIfEmpty(input.GivenName).String,
-		nullIfEmpty(input.FamilyName).String, nullIfEmpty(input.Picture).String,
-		nullIfEmpty(input.Locale).String, user.SourceClientID, now,
+	// Serialize custom fields to JSON — database/sql does NOT auto-serialize maps
+	customData := input.CustomFields
+	if customData == nil {
+		customData = make(map[string]any)
+	}
+	customDataJSON, err := json.Marshal(customData)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mysql: marshal custom_data: %w", err)
 	}
 
-	// Add custom fields as dynamic columns
-	if len(input.CustomFields) > 0 {
-		keys := make([]string, 0, len(input.CustomFields))
-		for k := range input.CustomFields {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		for _, k := range keys {
-			colName := mysqlIdentifier(k)
-			if colName == "" || isSystemColumn(colName) {
-				continue
-			}
-			cols = append(cols, colName)
-			placeholders = append(placeholders, "?")
-			args = append(args, input.CustomFields[k])
-		}
-	}
-
-	insertQuery := fmt.Sprintf(
-		"INSERT INTO app_user (%s) VALUES (%s)",
-		strings.Join(cols, ", "),
-		strings.Join(placeholders, ", "),
+	const insertUser = `
+		INSERT INTO app_user (id, email, email_verified, name, given_name, family_name, picture, locale, source_client_id, custom_data, created_at)
+		VALUES (?, ?, false, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err = tx.ExecContext(ctx, insertUser,
+		userID, user.Email,
+		nullIfEmpty(input.Name), nullIfEmpty(input.GivenName),
+		nullIfEmpty(input.FamilyName), nullIfEmpty(input.Picture),
+		nullIfEmpty(input.Locale), user.SourceClientID,
+		customDataJSON, now,
 	)
-
-	_, err = tx.ExecContext(ctx, insertQuery, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mysql: insert user: %w", err)
 	}
 
-	// Create password identity
 	identityID := uuid.New().String()
 	identity := &repository.Identity{
 		ID:           identityID,
@@ -393,7 +335,6 @@ func (r *userRepo) Update(ctx context.Context, userID string, input repository.U
 	setClauses := []string{}
 	args := []any{}
 
-	// System fields
 	if input.Name != nil {
 		setClauses = append(setClauses, "name = ?")
 		args = append(args, *input.Name)
@@ -423,27 +364,22 @@ func (r *userRepo) Update(ctx context.Context, userID string, input repository.U
 		}
 	}
 
-	// Custom fields
+	// Merge custom fields into JSON column via JSON_MERGE_PATCH
 	if len(input.CustomFields) > 0 {
-		keys := make([]string, 0, len(input.CustomFields))
-		for k := range input.CustomFields {
-			keys = append(keys, k)
+		customDataJSON, err := json.Marshal(input.CustomFields)
+		if err != nil {
+			return fmt.Errorf("mysql: marshal custom_data for update: %w", err)
 		}
-		sort.Strings(keys)
-
-		for _, k := range keys {
-			colName := mysqlIdentifier(k)
-			if colName == "" || isSystemColumn(colName) {
-				continue
-			}
-			setClauses = append(setClauses, fmt.Sprintf("%s = ?", colName))
-			args = append(args, input.CustomFields[k])
-		}
+		setClauses = append(setClauses, "custom_data = JSON_MERGE_PATCH(COALESCE(custom_data, '{}'), ?)")
+		args = append(args, customDataJSON)
 	}
 
 	if len(setClauses) == 0 {
-		return nil // Nothing to update
+		return nil
 	}
+
+	// Always touch updated_at
+	setClauses = append(setClauses, "updated_at = NOW()")
 
 	args = append(args, userID)
 	query := fmt.Sprintf("UPDATE app_user SET %s WHERE id = ?", strings.Join(setClauses, ", "))

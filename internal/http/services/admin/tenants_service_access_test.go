@@ -30,7 +30,7 @@ func TestFilterTenantsByAdminClaims(t *testing.T) {
 	t.Run("global admin with explicit assignments is filtered", func(t *testing.T) {
 		filtered := filterTenantsByAdminClaims(source, &jwt.AdminAccessClaims{
 			AdminType: "global",
-			Tenants:   []jwt.TenantAccessClaim{{Slug: "acme", Role: "owner"}},
+			Tenants:   []jwt.TenantAccessClaim{{ID: "acme", Role: "owner"}},
 		})
 		if len(filtered) != 1 || filtered[0].Slug != "acme" {
 			t.Fatalf("expected only acme tenant, got %+v", filtered)
@@ -40,7 +40,7 @@ func TestFilterTenantsByAdminClaims(t *testing.T) {
 	t.Run("wildcard assignment sees all", func(t *testing.T) {
 		filtered := filterTenantsByAdminClaims(source, &jwt.AdminAccessClaims{
 			AdminType: "global",
-			Tenants:   []jwt.TenantAccessClaim{{Slug: "*", Role: "owner"}},
+			Tenants:   []jwt.TenantAccessClaim{{ID: "*", Role: "owner"}},
 		})
 		if len(filtered) != len(source) {
 			t.Fatalf("expected %d tenants, got %d", len(source), len(filtered))
@@ -50,7 +50,7 @@ func TestFilterTenantsByAdminClaims(t *testing.T) {
 	t.Run("tenant admin filtered by slug", func(t *testing.T) {
 		filtered := filterTenantsByAdminClaims(source, &jwt.AdminAccessClaims{
 			AdminType: "tenant",
-			Tenants:   []jwt.TenantAccessClaim{{Slug: "acme", Role: "owner"}},
+			Tenants:   []jwt.TenantAccessClaim{{ID: "acme", Role: "owner"}},
 		})
 		if len(filtered) != 1 || filtered[0].Slug != "acme" {
 			t.Fatalf("expected only acme tenant, got %+v", filtered)
@@ -60,7 +60,7 @@ func TestFilterTenantsByAdminClaims(t *testing.T) {
 	t.Run("tenant admin filtered by id", func(t *testing.T) {
 		filtered := filterTenantsByAdminClaims(source, &jwt.AdminAccessClaims{
 			AdminType: "tenant",
-			Tenants:   []jwt.TenantAccessClaim{{Slug: "22222222-2222-2222-2222-222222222222", Role: "owner"}},
+			Tenants:   []jwt.TenantAccessClaim{{ID: "22222222-2222-2222-2222-222222222222", Role: "owner"}},
 		})
 		if len(filtered) != 1 || filtered[0].Slug != "globex" {
 			t.Fatalf("expected only globex tenant by id, got %+v", filtered)

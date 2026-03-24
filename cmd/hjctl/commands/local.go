@@ -37,6 +37,8 @@ func NewLocalCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newLocalInitCmd())
+	cmd.AddCommand(newLocalListCmd())
+	cmd.AddCommand(newLocalUpCmd())
 	cmd.AddCommand(newLocalStartCmd())
 	cmd.AddCommand(newLocalStopCmd())
 	cmd.AddCommand(newLocalStatusCmd())
@@ -77,6 +79,266 @@ func newLocalInitCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&profile, "profile", defaultLocalProfile, "Local runtime profile name")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing profile file")
+	return cmd
+}
+
+// newLocalListCmd implements `hjctl local list` — shows all configured profiles
+// with their current server state and tunnel configuration at a glance.
+func newLocalListCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all local runtime profiles",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			entries, err := os.ReadDir(localruntime.EnvDir())
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					fmt.Fprintln(cmd.OutOrStdout(), "No profiles found. Run: hjctl local init")
+					return nil
+				}
+				return fmt.Errorf("read profiles dir: %w", err)
+			}
+
+			// Determine which profile the running server belongs to.
+			runningProfile := ""
+			serverState, _ := localruntime.ReadState[localruntime.ServerState](localruntime.ServerStateFile())
+			serverAlive, _, _ := localruntime.IsAlive(localruntime.ServerPIDFile())
+			if serverAlive {
+				runningProfile = serverState.Profile
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%-20s  %-10s  %-10s  %s\n", "PROFILE", "SERVER", "TUNNEL", "DATA DIR")
+			fmt.Fprintf(cmd.OutOrStdout(), "%-20s  %-10s  %-10s  %s\n", strings.Repeat("-", 20), strings.Repeat("-", 10), strings.Repeat("-", 10), strings.Repeat("-", 20))
+
+			found := false
+			for _, entry := range entries {
+				name := entry.Name()
+				if entry.IsDir() || !strings.HasSuffix(name, ".env") {
+					continue
+				}
+				found = true
+				profile := strings.TrimSuffix(name, ".env")
+
+				serverStatus := "stopped"
+				if profile == runningProfile {
+					serverStatus = "running"
+				}
+
+				tunnelStatus := "no token"
+				if values, loadErr := localruntime.LoadProfile(profile); loadErr == nil {
+					if t := strings.TrimSpace(values["HELLOJOHN_TUNNEL_TOKEN"]); t != "" {
+						tunnelStatus = "configured"
+					}
+				}
+				// Also check commented-out token (informed but inactive)
+				if tunnelStatus == "no token" {
+					if entries, listErr := localruntime.ListProfileEntries(profile); listErr == nil {
+						for _, e := range entries {
+							if e.Key == "HELLOJOHN_TUNNEL_TOKEN" && strings.TrimSpace(e.Value) != "" {
+								tunnelStatus = "commented"
+								break
+							}
+						}
+					}
+				}
+
+				dataDir := "data"
+				if values, loadErr := localruntime.LoadProfile(profile); loadErr == nil {
+					if root := strings.TrimSpace(values["FS_ROOT"]); root != "" {
+						dataDir = root
+					}
+				}
+
+				fmt.Fprintf(cmd.OutOrStdout(), "%-20s  %-10s  %-10s  %s\n", profile, serverStatus, tunnelStatus, dataDir)
+			}
+
+			if !found {
+				fmt.Fprintln(cmd.OutOrStdout(), "No profiles found. Run: hjctl local init")
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+// newLocalUpCmd implements `hjctl local up` — a single command that brings
+// the full local runtime online: server first, then tunnel (if configured).
+// Idempotent: skips components that are already running.
+// Typical usage after a machine reboot: hjctl local up
+func newLocalUpCmd() *cobra.Command {
+	var (
+		profile string
+		port    int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "up",
+		Short: "Start server and tunnel in one step (ideal after reboot)",
+		Long: `Brings the full local runtime online in a single command.
+
+  1. Starts the HelloJohn server using the saved profile (same as 'hjctl local start').
+  2. If HELLOJOHN_TUNNEL_TOKEN is configured in the profile, automatically
+     connects the tunnel (same as 'hjctl local connect').
+
+Components that are already running are left untouched.
+Use 'hjctl local down' (alias for 'hjctl local stop') to bring everything down.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			profile = localProfile(profile)
+
+			envValues, err := localruntime.LoadProfile(profile)
+			if err != nil {
+				return localActionError(
+					"Profile not found.",
+					err.Error(),
+					fmt.Sprintf("Run: hjctl local init --profile %s", profile),
+				)
+			}
+
+			if validationErr := validateStartProfile(profile); validationErr != nil {
+				return validationErr
+			}
+
+			// ── Step 1: Server ─────────────────────────────────────────────────
+			serverAlive, serverPID, _ := localruntime.IsAlive(localruntime.ServerPIDFile())
+			var serverBaseURL string
+			if serverAlive {
+				serverState, _ := localruntime.ReadState[localruntime.ServerState](localruntime.ServerStateFile())
+				serverBaseURL = serverState.BaseURL
+				if serverBaseURL == "" {
+					serverBaseURL = "http://localhost:8080"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Server : already running (pid %d) at %s\n", serverPID, serverBaseURL)
+			} else {
+				baseURL, resolvedPort, err := resolveServerBaseURL(envValues, port)
+				if err != nil {
+					return localActionError(
+						"Invalid BASE_URL in profile.",
+						err.Error(),
+						fmt.Sprintf("Run: hjctl local env set BASE_URL=http://localhost:%d", 8080),
+					)
+				}
+				serverBaseURL = baseURL
+
+				binary, err := hellojohnBinary()
+				if err != nil {
+					return localActionError(
+						"Could not locate hellojohn binary.",
+						err.Error(),
+						"Install or add `hellojohn` to PATH.",
+					)
+				}
+
+				serverArgs := []string{"--port", strconv.Itoa(resolvedPort)}
+				resolveAbsFSRoot(envValues)
+				env := mapToEnv(envValues)
+				env = append(env, "BASE_URL="+baseURL)
+				env = append(env, "V2_SERVER_ADDR=:"+strconv.Itoa(resolvedPort))
+
+				if err := os.MkdirAll(localruntime.RunDir(), 0o755); err != nil {
+					return fmt.Errorf("create run dir: %w", err)
+				}
+
+				pid, err := localruntime.Spawn(binary, serverArgs, env, localruntime.ServerPIDFile(), localruntime.ServerLogFile())
+				if err != nil {
+					return err
+				}
+
+				state := localruntime.ServerState{
+					ProcessState: localruntime.ProcessState{PID: pid, StartedAt: time.Now().UTC(), Profile: profile},
+					Port:         resolvedPort,
+					BaseURL:      baseURL,
+				}
+				if err := localruntime.WriteState(localruntime.ServerStateFile(), state); err != nil {
+					_ = localruntime.StopProcess(localruntime.ServerPIDFile(), localruntime.ServerStateFile(), 2*time.Second)
+					return err
+				}
+
+				if err := waitForHealth(cmd.Context(), baseURL, 5, 2*time.Second); err != nil {
+					return localActionError(
+						"Server health check timed out.",
+						fmt.Sprintf("hellojohn (pid %d) did not respond on %s after 8s (5 probes, 2s apart).", pid, baseURL),
+						"hjctl local logs --tail 50",
+					)
+				}
+
+				bootstrapLocalAPIKey(cmd.OutOrStdout(), baseURL, profile)
+				fmt.Fprintf(cmd.OutOrStdout(), "Server : started (pid %d) at %s\n", pid, baseURL)
+			}
+
+			// ── Step 2: Tunnel ─────────────────────────────────────────────────
+			token := pickTunnelSetting("", envValues["HELLOJOHN_TUNNEL_TOKEN"], os.Getenv("HELLOJOHN_TUNNEL_TOKEN"))
+			if token == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Tunnel : no token configured — skipping.")
+				fmt.Fprintln(cmd.OutOrStdout(), "         To connect: hjctl local connect --token hjtun_...")
+				return nil
+			}
+
+			cloudURL := pickTunnelSetting("", envValues["HELLOJOHN_CLOUD_URL"], os.Getenv("HELLOJOHN_CLOUD_URL"))
+			if cloudURL == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Tunnel : HELLOJOHN_CLOUD_URL not configured — skipping.")
+				return nil
+			}
+
+			tunnelAlive, tunnelPID, _ := localruntime.IsAlive(localruntime.TunnelPIDFile())
+			if tunnelAlive {
+				fmt.Fprintf(cmd.OutOrStdout(), "Tunnel : already running (pid %d)\n", tunnelPID)
+				return nil
+			}
+
+			hjctlPath, err := hjctlBinary()
+			if err != nil {
+				return localActionError(
+					"Could not locate hjctl binary.",
+					err.Error(),
+					"Ensure hjctl is installed and in PATH.",
+				)
+			}
+
+			workerArgs := []string{
+				"_tunnel-worker",
+				"--cloud-url", cloudURL,
+				"--base-url", serverBaseURL,
+				"--state-file", localruntime.TunnelStateFile(),
+				"--quiet",
+			}
+			workerEnvValues := make(map[string]string, len(envValues)+1)
+			for k, v := range envValues {
+				workerEnvValues[k] = v
+			}
+			workerEnvValues["HELLOJOHN_TUNNEL_TOKEN"] = token
+
+			tunnelState := localruntime.TunnelState{
+				ProcessState: localruntime.ProcessState{StartedAt: time.Now().UTC(), Profile: profile},
+				CloudURL:     cloudURL,
+				TokenPrefix:  tunnelTokenPrefix(token),
+				Connected:    false,
+			}
+			if err := localruntime.WriteState(localruntime.TunnelStateFile(), tunnelState); err != nil {
+				return err
+			}
+
+			tunnelPIDNew, err := localruntime.Spawn(hjctlPath, workerArgs, mapToEnv(workerEnvValues), localruntime.TunnelPIDFile(), localruntime.TunnelLogFile())
+			if err != nil {
+				_ = os.Remove(localruntime.TunnelStateFile())
+				return err
+			}
+
+			if err := waitForTunnelConnection(cmd, 5*time.Second); err != nil {
+				return localActionError(
+					"Tunnel connection could not be confirmed.",
+					err.Error(),
+					"hjctl local tunnel logs --follow",
+					"hjctl local tunnel status",
+				)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Tunnel : connected (pid %d) to %s\n", tunnelPIDNew, cloudURL)
+			fmt.Fprintln(cmd.OutOrStdout(), "\nInstance is up. Run `hjctl local status` for details.")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&profile, "profile", defaultLocalProfile, "Local runtime profile name")
+	cmd.Flags().IntVar(&port, "port", 0, "Server port override")
 	return cmd
 }
 
@@ -135,6 +397,9 @@ func newLocalStartCmd() *cobra.Command {
 			}
 
 			serverArgs := []string{"--port", strconv.Itoa(resolvedPort)}
+			// Ensure FS_ROOT is absolute so the server finds its data
+			// regardless of which directory hjctl was invoked from.
+			resolveAbsFSRoot(envValues)
 			env := mapToEnv(envValues)
 			env = append(env, "BASE_URL="+baseURL)
 			env = append(env, "V2_SERVER_ADDR=:"+strconv.Itoa(resolvedPort))
@@ -182,6 +447,7 @@ func newLocalStartCmd() *cobra.Command {
 					"Server health check timed out.",
 					fmt.Sprintf("hellojohn (pid %d) did not respond on %s after 8s (5 probes, 2s apart).", pid, baseURL),
 					"hjctl local logs --tail 50",
+					"If this happened after a reboot, try: hjctl local stop && hjctl local start",
 				)
 			}
 
@@ -485,6 +751,21 @@ func mapToEnv(values map[string]string) []string {
 		out = append(out, fmt.Sprintf("%s=%s", key, values[key]))
 	}
 	return out
+}
+
+// resolveAbsFSRoot converts a relative FS_ROOT profile value to an absolute
+// path anchored to the process's current working directory. Without this, a
+// relative FS_ROOT (e.g. "data") would be interpreted relative to whichever
+// directory the user happened to invoke hjctl from — causing the server to
+// create a new data directory on each invocation from a different path.
+func resolveAbsFSRoot(envValues map[string]string) {
+	root := strings.TrimSpace(envValues["FS_ROOT"])
+	if root == "" || filepath.IsAbs(root) {
+		return
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		envValues["FS_ROOT"] = abs
+	}
 }
 
 // bootstrapLocalAPIKey provisions an admin API key for the running server if none

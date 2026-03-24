@@ -236,7 +236,7 @@ func RequireAdminAuthOrAPIKey(issuer *jwtx.Issuer, apiKeyRepo repository.APIKeyR
 
 				default:
 					// C-BACK-2: tenant:{slug} scoped keys: ONLY allowed on /v2/admin/tenants/{slug}/* paths.
-					slug := key.TenantSlug()
+					slug := key.TenantID()
 					if slug == "" {
 						errors.WriteError(w, errors.ErrForbidden.WithDetail("API key scope insufficient for admin access"))
 						return
@@ -253,13 +253,13 @@ func RequireAdminAuthOrAPIKey(issuer *jwtx.Issuer, apiKeyRepo repository.APIKeyR
 				// Build synthetic AdminAccessClaims from API key
 				adminType := "global"
 				var tenants []jwtx.TenantAccessClaim
-				if slug := key.TenantSlug(); slug != "" {
+				if slug := key.TenantID(); slug != "" {
 					adminType = "tenant"
-					tenants = []jwtx.TenantAccessClaim{{Slug: slug, Role: "owner"}}
+					tenants = []jwtx.TenantAccessClaim{{ID: slug, Role: "owner"}}
 				} else {
 					// Global admin/cloud keys: grant wildcard tenant access so that
 					// filterTenantsByAdminClaims returns all tenants instead of [].
-					tenants = []jwtx.TenantAccessClaim{{Slug: "*", Role: "owner"}}
+					tenants = []jwtx.TenantAccessClaim{{ID: "*", Role: "owner"}}
 				}
 
 				syntheticClaims := &jwtx.AdminAccessClaims{
@@ -394,7 +394,7 @@ func hasTenantAccess(allowedTenants []jwtx.TenantAccessClaim, refs ...string) bo
 
 	allowed := make(map[string]struct{}, len(allowedTenants))
 	for _, entry := range allowedTenants {
-		if n := normalizeTenantRef(entry.Slug); n != "" {
+		if n := normalizeTenantRef(entry.ID); n != "" {
 			allowed[n] = struct{}{}
 		}
 	}
@@ -454,7 +454,7 @@ func RequireAdminTenantRole(minRole string) Middleware {
 			// Buscar rol del admin para este tenant
 			actualRole := ""
 			for _, entry := range adminClaims.Tenants {
-				if strings.EqualFold(normalizeTenantRef(entry.Slug), normalizeTenantRef(tenantSlug)) {
+				if strings.EqualFold(normalizeTenantRef(entry.ID), normalizeTenantRef(tenantSlug)) {
 					actualRole = entry.Role
 					break
 				}

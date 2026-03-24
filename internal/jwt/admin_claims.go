@@ -3,10 +3,10 @@ package jwt
 import "strings"
 
 // TenantAccessClaim representa el acceso de un admin a un tenant con rol.
-// Se serializa como {"slug":"acme","role":"owner"} en el JWT.
+// Se serializa como {"tenant_id":"550e8400-...","role":"owner"} en el JWT.
 type TenantAccessClaim struct {
-	Slug string `json:"slug"`
-	Role string `json:"role"` // "owner" | "member" | "readonly"
+	ID   string `json:"tenant_id"` // UUID del tenant
+	Role string `json:"role"`      // "owner" | "member" | "readonly"
 }
 
 // AdminAccessClaims son los claims del access token de admin

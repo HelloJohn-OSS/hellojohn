@@ -120,6 +120,14 @@ func filterTenantsByAdminClaims(tenants []repository.Tenant, adminClaims *jwt.Ad
 		return []repository.Tenant{}
 	}
 
+	// Global admins have unrestricted visibility over all tenants regardless
+	// of the TenantAccess entries stored in their profile. An empty TenantAccess
+	// list on a global admin is valid (bootstrap state) and must not be treated
+	// as "no access".
+	if adminClaims.AdminType == "global" {
+		return tenants
+	}
+
 	if len(adminClaims.Tenants) == 0 {
 		return []repository.Tenant{}
 	}
@@ -227,6 +235,41 @@ func (s *tenantsService) Create(ctx context.Context, req dto.CreateTenantRequest
 	emitAdminEvent(ctx, s.auditBus, t.ID, audit.EventTenantCreated, t.ID, audit.TargetTenant, audit.ResultSuccess, map[string]any{
 		"tenant_slug": t.Slug,
 	})
+
+	// Auto-assign the new tenant to the acting admin when they are a
+	// tenant-scoped admin. Global admins see all tenants implicitly (via
+	// filterTenantsByAdminClaims) and synthetic API-key admins are never
+	// persisted, so only the "tenant" type needs an explicit assignment.
+	if adminClaims := mw.GetAdminClaims(ctx); adminClaims != nil &&
+		adminClaims.AdminType == "tenant" &&
+		!strings.HasPrefix(adminClaims.AdminID, "apikey:") {
+
+		adminRepo := s.dal.ConfigAccess().Admins()
+		existingAdmin, getErr := adminRepo.GetByID(ctx, adminClaims.AdminID)
+		if getErr == nil && existingAdmin != nil {
+			alreadyHas := false
+			for _, entry := range existingAdmin.TenantAccess {
+				if strings.EqualFold(entry.TenantID, t.Slug) {
+					alreadyHas = true
+					break
+				}
+			}
+			if !alreadyHas {
+				newAccess := append(existingAdmin.TenantAccess, repository.TenantAccessEntry{
+					TenantID: t.ID,
+					Role:       "owner",
+				})
+				if _, assignErr := adminRepo.Update(ctx, adminClaims.AdminID, repository.UpdateAdminInput{
+					TenantAccess: &newAccess,
+				}); assignErr != nil {
+					log.Warn("auto-assign tenant to admin failed",
+						logger.Err(assignErr),
+						logger.String("admin_id", adminClaims.AdminID),
+						logger.String("tenant_slug", t.Slug))
+				}
+			}
+		}
+	}
 
 	resp := mapTenantToResponse(t)
 

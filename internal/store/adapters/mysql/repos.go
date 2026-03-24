@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -937,34 +939,138 @@ func (r *identityRepo) UpdateClaims(ctx context.Context, identityID string, clai
 var _ repository.SchemaRepository = (*schemaRepo)(nil)
 
 func (r *schemaRepo) SyncUserFields(ctx context.Context, tenantID string, fields []repository.UserFieldDefinition) error {
-	// Para cada campo, verificar si la columna existe y crearla si no
+	// 1. Ensure custom_data JSON column exists (idempotent)
+	var customDataExists int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'app_user' AND COLUMN_NAME = 'custom_data'
+	`).Scan(&customDataExists); err != nil {
+		return fmt.Errorf("mysql: check custom_data column: %w", err)
+	}
+	if customDataExists == 0 {
+		if _, err := r.db.ExecContext(ctx, `ALTER TABLE app_user ADD COLUMN custom_data JSON DEFAULT (JSON_OBJECT())`); err != nil {
+			return fmt.Errorf("mysql: add custom_data column: %w", err)
+		}
+	}
+
+	// 2. Get existing generated columns (cf_* prefix)
+	existingGenCols := make(map[string]bool)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT COLUMN_NAME FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'app_user' AND COLUMN_NAME LIKE 'cf_%'
+	`)
+	if err != nil {
+		return fmt.Errorf("mysql: get existing generated columns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var col string
+		if err := rows.Scan(&col); err != nil {
+			return err
+		}
+		existingGenCols[col] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// 3. Apply field changes
 	for _, field := range fields {
-		colName := mysqlIdentifier(field.Name)
-		if colName == "" || isSystemColumn(colName) {
+		fieldName := mysqlIdentifier(field.Name)
+		if fieldName == "" || isSystemColumn(fieldName) {
 			continue
 		}
 
-		// Verificar si la columna existe
-		var exists int
-		err := r.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM information_schema.COLUMNS 
-			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'app_user' AND COLUMN_NAME = ?
-		`, colName).Scan(&exists)
-		if err != nil {
-			return fmt.Errorf("mysql: check column: %w", err)
-		}
+		genCol := "cf_" + fieldName
+		colType := mapFieldTypeToMySQL(field.Type)
 
-		if exists == 0 {
-			// Crear columna
-			colType := mapFieldTypeToMySQL(field.Type)
-			query := fmt.Sprintf("ALTER TABLE app_user ADD COLUMN %s %s", colName, colType)
+		if field.Unique {
+			// Unique: generated stored column + UNIQUE index
+			if !existingGenCols[genCol] {
+				// MySQL generated column syntax
+				query := fmt.Sprintf(
+					"ALTER TABLE app_user ADD COLUMN %s %s GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(custom_data, '$.%s'))) STORED",
+					genCol, colType, fieldName,
+				)
+				if _, err := r.db.ExecContext(ctx, query); err != nil {
+					return fmt.Errorf("mysql: add generated column %s: %w", genCol, err)
+				}
+			}
+
+			uqName := fmt.Sprintf("uq_cf_%s", fieldName)
+			query := fmt.Sprintf("CREATE UNIQUE INDEX %s ON app_user (%s)", uqName, genCol)
 			_, err := r.db.ExecContext(ctx, query)
-			if err != nil {
-				return fmt.Errorf("mysql: add column %s: %w", colName, err)
+			if err != nil && !isDuplicateKeyError(err) {
+				// Index may already exist — log and continue
+				log.Printf("Tenant %s: Failed to add unique index %s: %v", tenantID, uqName, err)
+			}
+
+			// Drop expression index if field changed from indexed to unique
+			idxName := fmt.Sprintf("idx_cf_%s", fieldName)
+			_, _ = r.db.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s ON app_user", idxName))
+
+		} else if field.Indexed {
+			// Indexed (non-unique): expression index on JSON extract
+			idxName := fmt.Sprintf("idx_cf_%s", fieldName)
+			// MySQL 8.0+ supports functional indexes on expressions
+			query := fmt.Sprintf(
+				"CREATE INDEX %s ON app_user ((CAST(custom_data->>'$.%s' AS CHAR(255))))",
+				idxName, fieldName,
+			)
+			_, err := r.db.ExecContext(ctx, query)
+			if err != nil && !isDuplicateKeyError(err) {
+				log.Printf("Tenant %s: Failed to create index %s: %v", tenantID, idxName, err)
+			}
+
+			// Drop unique index + generated column if field changed from unique to indexed
+			uqName := fmt.Sprintf("uq_cf_%s", fieldName)
+			_, _ = r.db.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s ON app_user", uqName))
+			if existingGenCols[genCol] {
+				_, _ = r.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE app_user DROP COLUMN %s", genCol))
+			}
+		} else {
+			// Plain field — clean up
+			idxName := fmt.Sprintf("idx_cf_%s", fieldName)
+			_, _ = r.db.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s ON app_user", idxName))
+			uqName := fmt.Sprintf("uq_cf_%s", fieldName)
+			_, _ = r.db.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s ON app_user", uqName))
+			if existingGenCols[genCol] {
+				_, _ = r.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE app_user DROP COLUMN %s", genCol))
 			}
 		}
 	}
+
+	// 4. Drop generated columns for fields removed from definition
+	allValidGenCols := make(map[string]bool)
+	for _, field := range fields {
+		fieldName := mysqlIdentifier(field.Name)
+		if fieldName != "" {
+			allValidGenCols["cf_"+fieldName] = true
+		}
+	}
+	for col := range existingGenCols {
+		if !allValidGenCols[col] {
+			fieldName := col[3:] // strip "cf_" prefix
+			uqName := fmt.Sprintf("uq_cf_%s", fieldName)
+			_, _ = r.db.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s ON app_user", uqName))
+			idxName := fmt.Sprintf("idx_cf_%s", fieldName)
+			_, _ = r.db.ExecContext(ctx, fmt.Sprintf("DROP INDEX %s ON app_user", idxName))
+			if _, err := r.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE app_user DROP COLUMN %s", col)); err != nil {
+				return fmt.Errorf("mysql: drop generated column %s: %w", col, err)
+			}
+		}
+	}
+
 	return nil
+}
+
+// isDuplicateKeyError checks if a MySQL error is a duplicate key/index error.
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Duplicate") || strings.Contains(msg, "already exists")
 }
 
 func mapFieldTypeToMySQL(fieldType string) string {

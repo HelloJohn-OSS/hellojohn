@@ -26,7 +26,7 @@ func TestRequireAdminTenantAccess_DeniedLogRedactsSensitiveFields(t *testing.T) 
 		AdminID:   "admin-1",
 		Email:     "admin@example.com",
 		AdminType: "tenant",
-		Tenants:   []jwt.TenantAccessClaim{{Slug: "tenant-a", Role: "owner"}},
+		Tenants:   []jwt.TenantAccessClaim{{ID: "tenant-a", Role: "owner"}},
 	})
 	req = req.WithContext(ctx)
 
@@ -122,7 +122,7 @@ func TestRequireAdminTenantAccess_AllowsClaimsIDWhenRequestUsesSlug(t *testing.T
 	ctx := SetAdminClaims(req.Context(), &jwt.AdminAccessClaims{
 		AdminID:   "admin-1",
 		AdminType: "tenant",
-		Tenants:   []jwt.TenantAccessClaim{{Slug: "tenant-123", Role: "owner"}},
+		Tenants:   []jwt.TenantAccessClaim{{ID: "tenant-123", Role: "owner"}},
 	})
 	ctx = WithTenant(ctx, &fakeAdminTenantTDA{slug: "acme", id: "tenant-123"})
 	req = req.WithContext(ctx)
@@ -149,7 +149,7 @@ func TestRequireAdminTenantAccess_AllowsClaimsSlugWhenRequestUsesID(t *testing.T
 	ctx := SetAdminClaims(req.Context(), &jwt.AdminAccessClaims{
 		AdminID:   "admin-1",
 		AdminType: "tenant",
-		Tenants:   []jwt.TenantAccessClaim{{Slug: "acme", Role: "owner"}},
+		Tenants:   []jwt.TenantAccessClaim{{ID: "acme", Role: "owner"}},
 	})
 	ctx = WithTenant(ctx, &fakeAdminTenantTDA{slug: "acme", id: "tenant-123"})
 	req = req.WithContext(ctx)
@@ -177,7 +177,7 @@ func TestRequireAdminTenantAccess_DeniesWhenQueryTenantConflictsWithCanonicalCon
 		AdminID:   "admin-1",
 		AdminType: "tenant",
 		// Solo coincide con query manipulada, NO con tenant canonico del contexto.
-		Tenants: []jwt.TenantAccessClaim{{Slug: "tenant-evil", Role: "owner"}},
+		Tenants: []jwt.TenantAccessClaim{{ID: "tenant-evil", Role: "owner"}},
 	})
 	ctx = WithTenant(ctx, &fakeAdminTenantTDA{slug: "acme", id: "tenant-123"})
 	req = req.WithContext(ctx)

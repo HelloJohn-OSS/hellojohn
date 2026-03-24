@@ -7,8 +7,8 @@ import (
 
 // TenantAccessEntry representa el acceso de un admin a un tenant específico.
 type TenantAccessEntry struct {
-	TenantSlug string `json:"tenant_slug" yaml:"tenant_slug"`
-	Role       string `json:"role"        yaml:"role"` // "owner" | "member" | "readonly"
+	TenantID string `json:"tenant_id" yaml:"tenant_id"` // UUID del tenant
+	Role     string `json:"role"      yaml:"role"`       // "owner" | "member" | "readonly"
 }
 
 // AdminType representa el tipo de administrador
@@ -65,13 +65,13 @@ type AdminEmailVerification struct {
 }
 
 // GetTenantRole retorna el rol del admin para un tenant dado.
-// Los admins globales siempre retornan "owner".
-func (a *Admin) GetTenantRole(tenantSlug string) string {
+// tenantID es el UUID del tenant. Los admins globales siempre retornan "owner".
+func (a *Admin) GetTenantRole(tenantID string) string {
 	if a.Type == AdminTypeGlobal {
 		return "owner"
 	}
 	for _, entry := range a.TenantAccess {
-		if entry.TenantSlug == tenantSlug {
+		if entry.TenantID == tenantID {
 			return entry.Role
 		}
 	}
@@ -79,13 +79,13 @@ func (a *Admin) GetTenantRole(tenantSlug string) string {
 }
 
 // HasTenantAccess retorna true si el admin tiene acceso al tenant.
-// Los admins globales siempre retornan true.
-func (a *Admin) HasTenantAccess(tenantSlug string) bool {
+// tenantID es el UUID del tenant. Los admins globales siempre retornan true.
+func (a *Admin) HasTenantAccess(tenantID string) bool {
 	if a.Type == AdminTypeGlobal {
 		return true
 	}
 	for _, entry := range a.TenantAccess {
-		if entry.TenantSlug == tenantSlug {
+		if entry.TenantID == tenantID {
 			return true
 		}
 	}

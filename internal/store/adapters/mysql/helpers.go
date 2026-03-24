@@ -188,10 +188,11 @@ func mysqlIdentifier(name string) string {
 // Estas columnas no pueden ser custom fields.
 func isSystemColumn(name string) bool {
 	switch name {
-	case "id", "email", "email_verified", "status", "profile", "metadata",
+	case "id", "tenant_id", "email", "email_verified", "status", "profile", "metadata",
 		"disabled_at", "disabled_reason", "disabled_until",
 		"created_at", "updated_at", "password_hash",
-		"name", "given_name", "family_name", "picture", "locale", "language", "source_client_id":
+		"name", "given_name", "family_name", "picture", "locale", "language", "source_client_id",
+		"custom_data":
 		return true
 	}
 	return false

@@ -161,7 +161,7 @@ func (m *Migrator) Run(ctx context.Context, exec SQLExecutor, driver string) (*M
 			continue
 		}
 
-		if err := m.applyMigration(ctx, exec, mig); err != nil {
+		if err := m.applyMigration(ctx, exec, mig, driver); err != nil {
 			result.Failed = &mig.Version
 			result.Error = fmt.Errorf("applying migration %d_%s: %w", mig.Version, mig.Name, err)
 			result.Duration = time.Since(start)
@@ -242,7 +242,12 @@ func (m *Migrator) getAppliedVersions(ctx context.Context, exec SQLExecutor) (ma
 	// Por ahora, asumimos que podemos ejecutar una query simple
 	applied := make(map[int]bool)
 
-	// Obtener máxima versión aplicada como heurística rápida
+	// NOTE: Uses MAX(version) heuristic — assumes sequential versioning (0001, 0002, ...).
+	// This is correct when migrations are always sequential (our case after consolidation).
+	// If migration gaps ever occur (e.g., 0001 applied, 0002 missing, 0003 applied),
+	// this would incorrectly mark 0002 as applied. SQLExecutor only supports QueryRowContext
+	// (single row), so a full SELECT version FROM _migrations would require extending the interface.
+	// TODO: If we add QueryContext to SQLExecutor, switch to exact version tracking.
 	var maxVersion int
 	row := exec.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM "+m.migrationsTbl)
 	if err := row.Scan(&maxVersion); err != nil {
@@ -252,8 +257,6 @@ func (m *Migrator) getAppliedVersions(ctx context.Context, exec SQLExecutor) (ma
 		return nil, err
 	}
 
-	// Marcar todas hasta max como aplicadas (simplificación)
-	// En producción, haríamos SELECT version FROM _migrations
 	for i := 1; i <= maxVersion; i++ {
 		applied[i] = true
 	}
@@ -262,18 +265,22 @@ func (m *Migrator) getAppliedVersions(ctx context.Context, exec SQLExecutor) (ma
 }
 
 // applyMigration ejecuta una migración.
-func (m *Migrator) applyMigration(ctx context.Context, exec SQLExecutor, mig Migration) error {
+func (m *Migrator) applyMigration(ctx context.Context, exec SQLExecutor, mig Migration, driver string) error {
 	// Ejecutar SQL de migración
 	_, err := exec.ExecContext(ctx, mig.SQL)
 	if err != nil {
 		return err
 	}
 
-	// Registrar en tabla de migraciones
-	_, err = exec.ExecContext(ctx,
-		"INSERT INTO "+m.migrationsTbl+" (version, name) VALUES ($1, $2)",
-		mig.Version, mig.Name,
-	)
+	// Registrar en tabla de migraciones — use driver-appropriate placeholders
+	var insertSQL string
+	switch driver {
+	case "mysql":
+		insertSQL = "INSERT INTO " + m.migrationsTbl + " (version, name) VALUES (?, ?)"
+	default:
+		insertSQL = "INSERT INTO " + m.migrationsTbl + " (version, name) VALUES ($1, $2)"
+	}
+	_, err = exec.ExecContext(ctx, insertSQL, mig.Version, mig.Name)
 	return err
 }
 
@@ -310,12 +317,12 @@ func (m *Migrator) RunWithPgxPool(ctx context.Context, pool PgxPoolExecutor) (*M
 	result := &MigrationResult{}
 
 	// Asegurar que existe la tabla de migraciones
-	createSQL := `
-		CREATE TABLE IF NOT EXISTS _migrations (
+	createSQL := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
 			version INT PRIMARY KEY,
 			name VARCHAR(255) NOT NULL,
 			applied_at TIMESTAMPTZ DEFAULT NOW()
-		)`
+		)`, m.migrationsTbl)
 	if _, err := pool.Exec(ctx, createSQL); err != nil {
 		result.Error = fmt.Errorf("creating migrations table: %w", err)
 		result.Duration = time.Since(start)
@@ -325,7 +332,7 @@ func (m *Migrator) RunWithPgxPool(ctx context.Context, pool PgxPoolExecutor) (*M
 	// Obtener versiones aplicadas
 	applied := make(map[int]bool)
 	var maxVersion int
-	row := pool.QueryRow(ctx, "SELECT COALESCE(MAX(version), 0) FROM _migrations")
+	row := pool.QueryRow(ctx, "SELECT COALESCE(MAX(version), 0) FROM "+m.migrationsTbl)
 	if err := row.Scan(&maxVersion); err != nil {
 		if !strings.Contains(err.Error(), "no rows") {
 			result.Error = fmt.Errorf("getting applied migrations: %w", err)
@@ -361,7 +368,7 @@ func (m *Migrator) RunWithPgxPool(ctx context.Context, pool PgxPoolExecutor) (*M
 		}
 
 		// Registrar en tabla de migraciones
-		if _, err := pool.Exec(ctx, "INSERT INTO _migrations (version, name) VALUES ($1, $2)", mig.Version, mig.Name); err != nil {
+		if _, err := pool.Exec(ctx, "INSERT INTO "+m.migrationsTbl+" (version, name) VALUES ($1, $2)", mig.Version, mig.Name); err != nil {
 			result.Failed = &mig.Version
 			result.Error = fmt.Errorf("recording migration %d: %w", mig.Version, err)
 			result.Duration = time.Since(start)

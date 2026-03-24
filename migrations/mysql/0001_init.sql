@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS app_user (
   email_verified BOOLEAN NOT NULL DEFAULT 0,
   status VARCHAR(32) NOT NULL DEFAULT 'active',
   metadata JSON NOT NULL,
+  custom_data JSON NOT NULL DEFAULT (JSON_OBJECT()),
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uniq_tenant_email (tenant_id, email),
   CONSTRAINT fk_user_tenant FOREIGN KEY (tenant_id) REFERENCES tenant(id) ON DELETE CASCADE

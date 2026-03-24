@@ -25,10 +25,10 @@ type DataAccessLayer interface {
 	ConfigAccess() ConfigAccess
 
 	// InvalidateTenantCache limpia el TenantDataAccess cacheado para el tenant
-	// identificado por slug. Borra tanto la entrada slug como la entrada UUID
+	// identificado por UUID. Borra tanto la entrada slug como la entrada UUID
 	// del cache interno (sync.Map) para evitar entradas huérfanas.
 	// Uso típico: llamar tras UpdateTenantSettings para forzar recarga de config.
-	InvalidateTenantCache(slug string)
+	InvalidateTenantCache(tenantID string)
 
 	// Mode retorna el modo operacional actual.
 	Mode() OperationalMode
@@ -94,9 +94,9 @@ type TenantDataAccess interface {
 type ConfigAccess interface {
 	Tenants() repository.TenantRepository
 	SystemSettings() repository.SystemSettingsRepository
-	Clients(tenantSlug string) repository.ClientRepository
-	Scopes(tenantSlug string) repository.ScopeRepository
-	Claims(tenantSlug string) repository.ClaimRepository
+	Clients(tenantID string) repository.ClientRepository
+	Scopes(tenantID string) repository.ScopeRepository
+	Claims(tenantID string) repository.ClaimRepository
 	Keys() repository.KeyRepository
 	Admins() repository.AdminRepository
 	AdminRefreshTokens() repository.AdminRefreshTokenRepository
@@ -250,44 +250,39 @@ func (m *Manager) ClearCache() {
 	})
 }
 
-// clearTenantBySlug es el helper interno que borra ambas entradas del sync.Map
-// dado el slug. Primero busca el TDA por slug para obtener el UUID, luego
-// borra ambas entradas.
-func (m *Manager) clearTenantBySlug(slug string) {
-	// Obtener el TDA desde cache para conocer su UUID
-	if v, ok := m.tenants.Load(slug); ok {
+// clearTenantByKey es el helper interno que borra ambas entradas del sync.Map
+// (slug y UUID) dado cualquiera de las dos claves. Primero busca el TDA para
+// obtener ambas claves, luego borra las dos.
+func (m *Manager) clearTenantByKey(key string) {
+	if v, ok := m.tenants.Load(key); ok {
 		tda := v.(TenantDataAccess)
-		tenantUUID := tda.ID()
-		m.tenants.Delete(slug)
-		if tenantUUID != slug {
-			m.tenants.Delete(tenantUUID)
-		}
+		m.tenants.Delete(tda.Slug())
+		m.tenants.Delete(tda.ID())
 	} else {
-		// El slug no está en cache; borrar de todas formas (caso defensivo)
-		m.tenants.Delete(slug)
+		m.tenants.Delete(key)
 	}
 }
 
 // ClearTenant limpia el cache para un tenant específico (slug y UUID).
-func (m *Manager) ClearTenant(slug string) {
-	m.clearTenantBySlug(slug)
+func (m *Manager) ClearTenant(key string) {
+	m.clearTenantByKey(key)
 }
 
 // InvalidateTenantCache implementa DataAccessLayer exponiendo el borrado de caché.
 // Borra tanto la entrada slug como la entrada UUID del sync.Map.
-func (m *Manager) InvalidateTenantCache(slug string) {
-	m.clearTenantBySlug(slug)
+func (m *Manager) InvalidateTenantCache(tenantID string) {
+	m.clearTenantByKey(tenantID)
 }
 
 // RefreshTenant cierra la conexión existente y la recrea con la configuración actualizada.
 // Útil cuando se cambia la configuración de DB de un tenant.
-func (m *Manager) RefreshTenant(ctx context.Context, slug string) error {
+func (m *Manager) RefreshTenant(ctx context.Context, slugOrID string) error {
 	// 1. Limpiar cache del TDA (slug + UUID)
-	m.clearTenantBySlug(slug)
+	m.clearTenantByKey(slugOrID)
 
 	// 2. Cerrar conexión del pool (si existe)
 	if m.factory != nil && m.factory.pool != nil {
-		if err := m.factory.pool.Close(slug); err != nil {
+		if err := m.factory.pool.Close(slugOrID); err != nil {
 			return fmt.Errorf("failed to close pool connection: %w", err)
 		}
 	}

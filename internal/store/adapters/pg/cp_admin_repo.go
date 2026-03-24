@@ -110,7 +110,7 @@ func (r *cpAdminRepo) GetByEmail(ctx context.Context, email string) (*repository
 func (r *cpAdminRepo) Create(ctx context.Context, input repository.CreateAdminInput) (*repository.Admin, error) {
 	tenantSlugs := make([]string, len(input.TenantAccess))
 	for i, e := range input.TenantAccess {
-		tenantSlugs[i] = e.TenantSlug
+		tenantSlugs[i] = e.TenantID
 	}
 	adminType := string(input.Type)
 	if adminType == "" {
@@ -173,7 +173,7 @@ func (r *cpAdminRepo) Update(ctx context.Context, id string, input repository.Up
 	if input.TenantAccess != nil {
 		slugs := make([]string, len(*input.TenantAccess))
 		for i, e := range *input.TenantAccess {
-			slugs[i] = e.TenantSlug
+			slugs[i] = e.TenantID
 		}
 		setClauses = append(setClauses, fmt.Sprintf("tenant_ids=$%d", n))
 		args = append(args, slugs)
@@ -349,7 +349,7 @@ func (r *cpAdminRepo) scanRow(row interface {
 	a.AssignedTenants = tenantIDs
 	a.TenantAccess = make([]repository.TenantAccessEntry, len(tenantIDs))
 	for i, s := range tenantIDs {
-		a.TenantAccess[i] = repository.TenantAccessEntry{TenantSlug: s, Role: "owner"}
+		a.TenantAccess[i] = repository.TenantAccessEntry{TenantID: s, Role: "owner"}
 	}
 	return &a, nil
 }

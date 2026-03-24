@@ -104,9 +104,6 @@ func (r *cpClientRepo) Create(ctx context.Context, input repository.ClientInput)
 	q := `INSERT INTO cp_client
 			(tenant_id, client_id, name, type, secret_enc, settings, redirect_uris, allowed_scopes, enabled, created_at, updated_at)
 		  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,now(),now())
-		  ON CONFLICT (tenant_id,client_id) DO UPDATE
-		    SET name=$3, type=$4, secret_enc=COALESCE($5,cp_client.secret_enc),
-		        settings=$6, redirect_uris=$7, allowed_scopes=$8, updated_at=now()
 		  RETURNING` + cpClientColumns
 	row := r.pool.QueryRow(ctx, q,
 		r.tenantID, input.ClientID, input.Name, input.Type,

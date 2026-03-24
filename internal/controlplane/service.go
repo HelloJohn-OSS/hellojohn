@@ -27,25 +27,25 @@
 //
 //	// ─── Tenants ───
 //	ListTenants(ctx context.Context) ([]repository.Tenant, error)
-//	GetTenant(ctx context.Context, slug string) (*repository.Tenant, error)
+//	GetTenant(ctx context.Context, tenantID string) (*repository.Tenant, error)
 //	GetTenantByID(ctx context.Context, id string) (*repository.Tenant, error)
 //	CreateTenant(ctx context.Context, name, slug string) (*repository.Tenant, error)
 //	UpdateTenant(ctx context.Context, tenant *repository.Tenant) error
-//	DeleteTenant(ctx context.Context, slug string) error
-//	UpdateTenantSettings(ctx context.Context, slug string, settings *repository.TenantSettings) error
+//	DeleteTenant(ctx context.Context, tenantID string) error
+//	UpdateTenantSettings(ctx context.Context, tenantID string, settings *repository.TenantSettings) error
 //
 //	// ─── Clients ───
-//	ListClients(ctx context.Context, slug string) ([]repository.Client, error)
-//	GetClient(ctx context.Context, slug, clientID string) (*repository.Client, error)
-//	CreateClient(ctx context.Context, slug string, input ClientInput) (*repository.Client, error)
-//	UpdateClient(ctx context.Context, slug string, input ClientInput) (*repository.Client, error)
-//	DeleteClient(ctx context.Context, slug, clientID string) error
-//	DecryptClientSecret(ctx context.Context, slug, clientID string) (string, error)
+//	ListClients(ctx context.Context, tenantID string) ([]repository.Client, error)
+//	GetClient(ctx context.Context, tenantID, clientID string) (*repository.Client, error)
+//	CreateClient(ctx context.Context, tenantID string, input ClientInput) (*repository.Client, error)
+//	UpdateClient(ctx context.Context, tenantID string, input ClientInput) (*repository.Client, error)
+//	DeleteClient(ctx context.Context, tenantID, clientID string) error
+//	DecryptClientSecret(ctx context.Context, tenantID, clientID string) (string, error)
 //
 //	// ─── Scopes ───
-//	ListScopes(ctx context.Context, slug string) ([]repository.Scope, error)
-//	CreateScope(ctx context.Context, slug, name, description string) (*repository.Scope, error)
-//	DeleteScope(ctx context.Context, slug, name string) error
+//	ListScopes(ctx context.Context, tenantID string) ([]repository.Scope, error)
+//	CreateScope(ctx context.Context, tenantID, name, description string) (*repository.Scope, error)
+//	DeleteScope(ctx context.Context, tenantID, name string) error
 //
 //	// ─── Validations ───
 //	ValidateClientID(id string) bool
@@ -89,38 +89,38 @@ var (
 type Service interface {
 	// ─── Tenants ───
 	ListTenants(ctx context.Context) ([]repository.Tenant, error)
-	GetTenant(ctx context.Context, slug string) (*repository.Tenant, error)
+	GetTenant(ctx context.Context, tenantID string) (*repository.Tenant, error)
 	GetTenantByID(ctx context.Context, id string) (*repository.Tenant, error)
 	CreateTenant(ctx context.Context, name, slug string, language string) (*repository.Tenant, error)
 	UpdateTenant(ctx context.Context, tenant *repository.Tenant) error
-	DeleteTenant(ctx context.Context, slug string) error
-	UpdateTenantSettings(ctx context.Context, slug string, settings *repository.TenantSettings) error
+	DeleteTenant(ctx context.Context, tenantID string) error
+	UpdateTenantSettings(ctx context.Context, tenantID string, settings *repository.TenantSettings) error
 
 	// ─── Clients ───
-	ListClients(ctx context.Context, slug string) ([]repository.Client, error)
-	GetClient(ctx context.Context, slug, clientID string) (*repository.Client, error)
-	CreateClient(ctx context.Context, slug string, input ClientInput) (*repository.Client, error)
-	UpdateClient(ctx context.Context, slug string, input ClientInput) (*repository.Client, error)
-	DeleteClient(ctx context.Context, slug, clientID string) error
-	DecryptClientSecret(ctx context.Context, slug, clientID string) (string, error)
+	ListClients(ctx context.Context, tenantID string) ([]repository.Client, error)
+	GetClient(ctx context.Context, tenantID, clientID string) (*repository.Client, error)
+	CreateClient(ctx context.Context, tenantID string, input ClientInput) (*repository.Client, error)
+	UpdateClient(ctx context.Context, tenantID string, input ClientInput) (*repository.Client, error)
+	DeleteClient(ctx context.Context, tenantID, clientID string) error
+	DecryptClientSecret(ctx context.Context, tenantID, clientID string) (string, error)
 
 	// ─── Scopes ───
-	ListScopes(ctx context.Context, slug string) ([]repository.Scope, error)
-	CreateScope(ctx context.Context, slug string, input repository.ScopeInput) (*repository.Scope, error)
-	UpsertScope(ctx context.Context, slug string, input repository.ScopeInput) (*repository.Scope, error)
-	DeleteScope(ctx context.Context, slug, name string) error
+	ListScopes(ctx context.Context, tenantID string) ([]repository.Scope, error)
+	CreateScope(ctx context.Context, tenantID string, input repository.ScopeInput) (*repository.Scope, error)
+	UpsertScope(ctx context.Context, tenantID string, input repository.ScopeInput) (*repository.Scope, error)
+	DeleteScope(ctx context.Context, tenantID, name string) error
 
 	// ─── Claims ───
-	GetClaimsConfig(ctx context.Context, slug string) (*ClaimsConfig, error)
-	ListCustomClaims(ctx context.Context, slug string) ([]repository.ClaimDefinition, error)
-	CreateCustomClaim(ctx context.Context, slug string, input repository.ClaimInput) (*repository.ClaimDefinition, error)
-	GetCustomClaim(ctx context.Context, slug, claimID string) (*repository.ClaimDefinition, error)
-	UpdateCustomClaim(ctx context.Context, slug, claimID string, input repository.ClaimInput) (*repository.ClaimDefinition, error)
-	DeleteCustomClaim(ctx context.Context, slug, claimID string) error
-	ToggleStandardClaim(ctx context.Context, slug, claimName string, enabled bool) error
-	GetClaimsSettings(ctx context.Context, slug string) (*repository.ClaimsSettings, error)
-	UpdateClaimsSettings(ctx context.Context, slug string, input repository.ClaimsSettingsInput) (*repository.ClaimsSettings, error)
-	GetScopeMappings(ctx context.Context, slug string) ([]repository.ScopeClaimMapping, error)
+	GetClaimsConfig(ctx context.Context, tenantID string) (*ClaimsConfig, error)
+	ListCustomClaims(ctx context.Context, tenantID string) ([]repository.ClaimDefinition, error)
+	CreateCustomClaim(ctx context.Context, tenantID string, input repository.ClaimInput) (*repository.ClaimDefinition, error)
+	GetCustomClaim(ctx context.Context, tenantID, claimID string) (*repository.ClaimDefinition, error)
+	UpdateCustomClaim(ctx context.Context, tenantID, claimID string, input repository.ClaimInput) (*repository.ClaimDefinition, error)
+	DeleteCustomClaim(ctx context.Context, tenantID, claimID string) error
+	ToggleStandardClaim(ctx context.Context, tenantID, claimName string, enabled bool) error
+	GetClaimsSettings(ctx context.Context, tenantID string) (*repository.ClaimsSettings, error)
+	UpdateClaimsSettings(ctx context.Context, tenantID string, input repository.ClaimsSettingsInput) (*repository.ClaimsSettings, error)
+	GetScopeMappings(ctx context.Context, tenantID string) ([]repository.ScopeClaimMapping, error)
 
 	// ─── Admins ───
 	ListAdmins(ctx context.Context) ([]repository.Admin, error)
@@ -229,8 +229,8 @@ func (s *service) ListTenants(ctx context.Context) ([]repository.Tenant, error) 
 	return s.store.ConfigAccess().Tenants().List(ctx)
 }
 
-func (s *service) GetTenant(ctx context.Context, slug string) (*repository.Tenant, error) {
-	tenant, err := s.store.ConfigAccess().Tenants().GetBySlug(ctx, slug)
+func (s *service) GetTenant(ctx context.Context, tenantID string) (*repository.Tenant, error) {
+	tenant, err := s.store.ConfigAccess().Tenants().GetByID(ctx, tenantID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrTenantNotFound
@@ -297,11 +297,11 @@ func (s *service) UpdateTenant(ctx context.Context, tenant *repository.Tenant) e
 	return s.store.ConfigAccess().Tenants().Update(ctx, tenant)
 }
 
-func (s *service) DeleteTenant(ctx context.Context, slug string) error {
-	return s.store.ConfigAccess().Tenants().Delete(ctx, slug)
+func (s *service) DeleteTenant(ctx context.Context, tenantID string) error {
+	return s.store.ConfigAccess().Tenants().Delete(ctx, tenantID)
 }
 
-func (s *service) UpdateTenantSettings(ctx context.Context, slug string, settings *repository.TenantSettings) (retErr error) {
+func (s *service) UpdateTenantSettings(ctx context.Context, tenantID string, settings *repository.TenantSettings) (retErr error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("[CRITICAL] panic in UpdateTenantSettings: %v\n%s", rec, debug.Stack())
@@ -347,21 +347,21 @@ func (s *service) UpdateTenantSettings(ctx context.Context, slug string, setting
 		settings.Cache.Password = "" // Limpiar plain
 	}
 
-	err := s.store.ConfigAccess().Tenants().UpdateSettings(ctx, slug, settings)
+	err := s.store.ConfigAccess().Tenants().UpdateSettings(ctx, tenantID, settings)
 	if err == nil {
-		s.store.InvalidateTenantCache(slug)
+		s.store.InvalidateTenantCache(tenantID)
 	}
 	return err
 }
 
 // ─── Clients ───
 
-func (s *service) ListClients(ctx context.Context, slug string) ([]repository.Client, error) {
-	return s.store.ConfigAccess().Clients(slug).List(ctx, "")
+func (s *service) ListClients(ctx context.Context, tenantID string) ([]repository.Client, error) {
+	return s.store.ConfigAccess().Clients(tenantID).List(ctx, "")
 }
 
-func (s *service) GetClient(ctx context.Context, slug, clientID string) (*repository.Client, error) {
-	client, err := s.store.ConfigAccess().Clients(slug).Get(ctx, clientID)
+func (s *service) GetClient(ctx context.Context, tenantID, clientID string) (*repository.Client, error) {
+	client, err := s.store.ConfigAccess().Clients(tenantID).Get(ctx, clientID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrClientNotFound
@@ -371,7 +371,7 @@ func (s *service) GetClient(ctx context.Context, slug, clientID string) (*reposi
 	return client, nil
 }
 
-func (s *service) CreateClient(ctx context.Context, slug string, input ClientInput) (*repository.Client, error) {
+func (s *service) CreateClient(ctx context.Context, tenantID string, input ClientInput) (*repository.Client, error) {
 	// Validaciones
 	if !s.ValidateClientID(input.ClientID) {
 		return nil, fmt.Errorf("%w: invalid clientId", ErrBadInput)
@@ -452,7 +452,7 @@ func (s *service) CreateClient(ctx context.Context, slug string, input ClientInp
 		Description:     input.Description,
 	}
 
-	client, err := s.store.ConfigAccess().Clients(slug).Create(ctx, repoInput)
+	client, err := s.store.ConfigAccess().Clients(tenantID).Create(ctx, repoInput)
 	if err != nil {
 		return nil, err
 	}
@@ -466,12 +466,12 @@ func (s *service) CreateClient(ctx context.Context, slug string, input ClientInp
 	return client, nil
 }
 
-func (s *service) UpdateClient(ctx context.Context, slug string, input ClientInput) (*repository.Client, error) {
+func (s *service) UpdateClient(ctx context.Context, tenantID string, input ClientInput) (*repository.Client, error) {
 	// Validaciones similares a Create
 	if !s.ValidateClientID(input.ClientID) {
 		return nil, fmt.Errorf("%w: invalid clientId", ErrBadInput)
 	}
-	current, err := s.store.ConfigAccess().Clients(slug).Get(ctx, input.ClientID)
+	current, err := s.store.ConfigAccess().Clients(tenantID).Get(ctx, input.ClientID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrClientNotFound
@@ -547,15 +547,15 @@ func (s *service) UpdateClient(ctx context.Context, slug string, input ClientInp
 		Description:     input.Description,
 	}
 
-	return s.store.ConfigAccess().Clients(slug).Update(ctx, repoInput)
+	return s.store.ConfigAccess().Clients(tenantID).Update(ctx, repoInput)
 }
 
-func (s *service) DeleteClient(ctx context.Context, slug, clientID string) error {
-	return s.store.ConfigAccess().Clients(slug).Delete(ctx, clientID)
+func (s *service) DeleteClient(ctx context.Context, tenantID, clientID string) error {
+	return s.store.ConfigAccess().Clients(tenantID).Delete(ctx, clientID)
 }
 
-func (s *service) DecryptClientSecret(ctx context.Context, slug, clientID string) (string, error) {
-	client, err := s.GetClient(ctx, slug, clientID)
+func (s *service) DecryptClientSecret(ctx context.Context, tenantID, clientID string) (string, error) {
+	client, err := s.GetClient(ctx, tenantID, clientID)
 	if err != nil {
 		return "", err
 	}
@@ -567,27 +567,27 @@ func (s *service) DecryptClientSecret(ctx context.Context, slug, clientID string
 
 // ─── Scopes ───
 
-func (s *service) ListScopes(ctx context.Context, slug string) ([]repository.Scope, error) {
-	return s.store.ConfigAccess().Scopes(slug).List(ctx)
+func (s *service) ListScopes(ctx context.Context, tenantID string) ([]repository.Scope, error) {
+	return s.store.ConfigAccess().Scopes(tenantID).List(ctx)
 }
 
-func (s *service) CreateScope(ctx context.Context, slug string, input repository.ScopeInput) (*repository.Scope, error) {
+func (s *service) CreateScope(ctx context.Context, tenantID string, input repository.ScopeInput) (*repository.Scope, error) {
 	if strings.TrimSpace(input.Name) == "" {
 		return nil, fmt.Errorf("%w: scope name required", ErrBadInput)
 	}
-	return s.store.ConfigAccess().Scopes(slug).Create(ctx, input)
+	return s.store.ConfigAccess().Scopes(tenantID).Create(ctx, input)
 }
 
-func (s *service) UpsertScope(ctx context.Context, slug string, input repository.ScopeInput) (*repository.Scope, error) {
+func (s *service) UpsertScope(ctx context.Context, tenantID string, input repository.ScopeInput) (*repository.Scope, error) {
 	if strings.TrimSpace(input.Name) == "" {
 		return nil, fmt.Errorf("%w: scope name required", ErrBadInput)
 	}
-	return s.store.ConfigAccess().Scopes(slug).Upsert(ctx, input)
+	return s.store.ConfigAccess().Scopes(tenantID).Upsert(ctx, input)
 }
 
-func (s *service) DeleteScope(ctx context.Context, slug, name string) error {
+func (s *service) DeleteScope(ctx context.Context, tenantID, name string) error {
 	// Verificar que no esté en uso por algún client
-	clients, err := s.ListClients(ctx, slug)
+	clients, err := s.ListClients(ctx, tenantID)
 	if err != nil {
 		return err
 	}
@@ -600,7 +600,7 @@ func (s *service) DeleteScope(ctx context.Context, slug, name string) error {
 	}
 
 	// Verificar que no sea requerido por otros scopes (depends_on)
-	scopes, err := s.ListScopes(ctx, slug)
+	scopes, err := s.ListScopes(ctx, tenantID)
 	if err != nil {
 		return err
 	}
@@ -610,7 +610,7 @@ func (s *service) DeleteScope(ctx context.Context, slug, name string) error {
 		}
 	}
 
-	return s.store.ConfigAccess().Scopes(slug).Delete(ctx, name)
+	return s.store.ConfigAccess().Scopes(tenantID).Delete(ctx, name)
 }
 
 // ─── Claims ───
@@ -622,8 +622,8 @@ type ClaimsConfig struct {
 	Settings       *repository.ClaimsSettings
 }
 
-func (s *service) GetClaimsConfig(ctx context.Context, slug string) (*ClaimsConfig, error) {
-	claimRepo := s.store.ConfigAccess().Claims(slug)
+func (s *service) GetClaimsConfig(ctx context.Context, tenantID string) (*ClaimsConfig, error) {
+	claimRepo := s.store.ConfigAccess().Claims(tenantID)
 
 	standard, err := claimRepo.GetStandardClaimsConfig(ctx)
 	if err != nil {
@@ -647,44 +647,44 @@ func (s *service) GetClaimsConfig(ctx context.Context, slug string) (*ClaimsConf
 	}, nil
 }
 
-func (s *service) ListCustomClaims(ctx context.Context, slug string) ([]repository.ClaimDefinition, error) {
-	return s.store.ConfigAccess().Claims(slug).List(ctx)
+func (s *service) ListCustomClaims(ctx context.Context, tenantID string) ([]repository.ClaimDefinition, error) {
+	return s.store.ConfigAccess().Claims(tenantID).List(ctx)
 }
 
-func (s *service) CreateCustomClaim(ctx context.Context, slug string, input repository.ClaimInput) (*repository.ClaimDefinition, error) {
+func (s *service) CreateCustomClaim(ctx context.Context, tenantID string, input repository.ClaimInput) (*repository.ClaimDefinition, error) {
 	if strings.TrimSpace(input.Name) == "" {
 		return nil, fmt.Errorf("%w: claim name required", ErrBadInput)
 	}
-	return s.store.ConfigAccess().Claims(slug).Create(ctx, input)
+	return s.store.ConfigAccess().Claims(tenantID).Create(ctx, input)
 }
 
-func (s *service) GetCustomClaim(ctx context.Context, slug, claimID string) (*repository.ClaimDefinition, error) {
-	return s.store.ConfigAccess().Claims(slug).Get(ctx, claimID)
+func (s *service) GetCustomClaim(ctx context.Context, tenantID, claimID string) (*repository.ClaimDefinition, error) {
+	return s.store.ConfigAccess().Claims(tenantID).Get(ctx, claimID)
 }
 
-func (s *service) UpdateCustomClaim(ctx context.Context, slug, claimID string, input repository.ClaimInput) (*repository.ClaimDefinition, error) {
-	return s.store.ConfigAccess().Claims(slug).Update(ctx, claimID, input)
+func (s *service) UpdateCustomClaim(ctx context.Context, tenantID, claimID string, input repository.ClaimInput) (*repository.ClaimDefinition, error) {
+	return s.store.ConfigAccess().Claims(tenantID).Update(ctx, claimID, input)
 }
 
-func (s *service) DeleteCustomClaim(ctx context.Context, slug, claimID string) error {
-	return s.store.ConfigAccess().Claims(slug).Delete(ctx, claimID)
+func (s *service) DeleteCustomClaim(ctx context.Context, tenantID, claimID string) error {
+	return s.store.ConfigAccess().Claims(tenantID).Delete(ctx, claimID)
 }
 
-func (s *service) ToggleStandardClaim(ctx context.Context, slug, claimName string, enabled bool) error {
-	return s.store.ConfigAccess().Claims(slug).SetStandardClaimEnabled(ctx, claimName, enabled)
+func (s *service) ToggleStandardClaim(ctx context.Context, tenantID, claimName string, enabled bool) error {
+	return s.store.ConfigAccess().Claims(tenantID).SetStandardClaimEnabled(ctx, claimName, enabled)
 }
 
-func (s *service) GetClaimsSettings(ctx context.Context, slug string) (*repository.ClaimsSettings, error) {
-	return s.store.ConfigAccess().Claims(slug).GetSettings(ctx)
+func (s *service) GetClaimsSettings(ctx context.Context, tenantID string) (*repository.ClaimsSettings, error) {
+	return s.store.ConfigAccess().Claims(tenantID).GetSettings(ctx)
 }
 
-func (s *service) UpdateClaimsSettings(ctx context.Context, slug string, input repository.ClaimsSettingsInput) (*repository.ClaimsSettings, error) {
-	return s.store.ConfigAccess().Claims(slug).UpdateSettings(ctx, input)
+func (s *service) UpdateClaimsSettings(ctx context.Context, tenantID string, input repository.ClaimsSettingsInput) (*repository.ClaimsSettings, error) {
+	return s.store.ConfigAccess().Claims(tenantID).UpdateSettings(ctx, input)
 }
 
-func (s *service) GetScopeMappings(ctx context.Context, slug string) ([]repository.ScopeClaimMapping, error) {
+func (s *service) GetScopeMappings(ctx context.Context, tenantID string) ([]repository.ScopeClaimMapping, error) {
 	// Build mappings from scopes that have claims
-	scopes, err := s.ListScopes(ctx, slug)
+	scopes, err := s.ListScopes(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}

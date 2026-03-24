@@ -4,10 +4,11 @@ package pg
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -35,7 +36,7 @@ func nullIfEmpty(s string) *string {
 
 // pgIdentifier sanitizes a string to be used as a PostgreSQL identifier.
 // Only allows alphanumeric characters and underscores.
-var validIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+var validIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,58}$`)
 
 // pgIdentifier normalizes and validates a string to be used as a PostgreSQL identifier.
 // Converts spaces to underscores, removes accents, and validates the result.
@@ -89,10 +90,11 @@ func pgIdentifier(name string) string {
 // isSystemColumn returns true if the column is a system column (not a custom field).
 func isSystemColumn(name string) bool {
 	switch name {
-	case "id", "email", "email_verified", "status", "profile", "metadata",
+	case "id", "tenant_id", "email", "email_verified", "status", "profile", "metadata",
 		"disabled_at", "disabled_reason", "disabled_until",
 		"created_at", "updated_at", "password_hash",
-		"name", "given_name", "family_name", "picture", "locale", "language", "source_client_id":
+		"name", "given_name", "family_name", "picture", "locale", "language", "source_client_id",
+		"custom_data":
 		return true
 	}
 	return false
@@ -215,11 +217,11 @@ func (w *pgxPoolWrapper) QueryRow(ctx context.Context, sql string, args ...any) 
 type userRepo struct{ pool *pgxpool.Pool }
 
 func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*repository.User, *repository.Identity, error) {
-	// Nota: tenant_id no existe en la tabla porque cada tenant tiene su propia DB aislada
-	// Custom fields are stored as dynamic columns, not as a JSON field
 	const query = `
-		SELECT u.id, u.email, u.email_verified, COALESCE(u.name, ''), COALESCE(u.given_name, ''), COALESCE(u.family_name, ''),
-		       COALESCE(u.picture, ''), COALESCE(u.locale, ''), COALESCE(u.language, ''), u.source_client_id, u.created_at, u.metadata,
+		SELECT u.id, u.email, u.email_verified,
+		       COALESCE(u.name, ''), COALESCE(u.given_name, ''), COALESCE(u.family_name, ''),
+		       COALESCE(u.picture, ''), COALESCE(u.locale, ''), COALESCE(u.language, ''),
+		       u.source_client_id, u.created_at, u.metadata, u.custom_data,
 		       u.disabled_at, u.disabled_until, u.disabled_reason,
 		       i.id, i.provider, i.provider_user_id, i.email, i.email_verified, i.password_hash, i.created_at
 		FROM app_user u
@@ -229,20 +231,27 @@ func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*rep
 	`
 
 	var user repository.User
-	var identity repository.Identity
-	var pwdHash *string
 	var metadata []byte
+	var customData []byte
 
-	// tenantID se usa para poblar el struct, no para filtrar (cada DB es de un tenant)
+	// Nullable identity fields (NULL when user has no password identity — social-only users)
+	var identityID *string
+	var identityProvider *string
+	var identityProviderUserID *string
+	var identityEmail *string
+	var identityEmailVerified *bool
+	var pwdHash *string
+	var identityCreatedAt *time.Time
+
 	user.TenantID = tenantID
 
 	err := r.pool.QueryRow(ctx, query, email).Scan(
 		&user.ID, &user.Email, &user.EmailVerified,
-		&user.Name, &user.GivenName, &user.FamilyName, &user.Picture, &user.Locale, &user.Language, &user.SourceClientID,
-		&user.CreatedAt, &metadata,
+		&user.Name, &user.GivenName, &user.FamilyName, &user.Picture, &user.Locale, &user.Language,
+		&user.SourceClientID, &user.CreatedAt, &metadata, &customData,
 		&user.DisabledAt, &user.DisabledUntil, &user.DisabledReason,
-		&identity.ID, &identity.Provider, &identity.ProviderUserID,
-		&identity.Email, &identity.EmailVerified, &pwdHash, &identity.CreatedAt,
+		&identityID, &identityProvider, &identityProviderUserID,
+		&identityEmail, &identityEmailVerified, &pwdHash, &identityCreatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil, repository.ErrNotFound
@@ -251,135 +260,89 @@ func (r *userRepo) GetByEmail(ctx context.Context, tenantID, email string) (*rep
 		return nil, nil, fmt.Errorf("pg: get user by email: %w", err)
 	}
 
-	identity.UserID = user.ID
-	identity.PasswordHash = pwdHash
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &user.Metadata); err != nil {
+			log.Printf("WARN: pg: json.Unmarshal metadata for user %s: %v", user.Email, err)
+		}
+	}
+	user.CustomFields = unmarshalCustomData(customData)
+
+	// Social-only users have no password identity row — return nil identity
+	if identityID == nil {
+		return &user, nil, nil
+	}
+
+	identity := repository.Identity{
+		UserID:       user.ID,
+		PasswordHash: pwdHash,
+	}
+	identity.ID = *identityID
+	if identityProvider != nil {
+		identity.Provider = *identityProvider
+	}
+	if identityProviderUserID != nil {
+		identity.ProviderUserID = *identityProviderUserID
+	}
+	if identityEmail != nil {
+		identity.Email = *identityEmail
+	}
+	if identityEmailVerified != nil {
+		identity.EmailVerified = *identityEmailVerified
+	}
+	if identityCreatedAt != nil {
+		identity.CreatedAt = *identityCreatedAt
+	}
 
 	return &user, &identity, nil
 }
 
 func (r *userRepo) GetByID(ctx context.Context, userID string) (*repository.User, error) {
-	// Use SELECT * to get all columns including dynamic custom fields
-	const query = `SELECT * FROM app_user WHERE id = $1`
+	const query = `
+		SELECT id, email, email_verified,
+		       COALESCE(name, ''), COALESCE(given_name, ''), COALESCE(family_name, ''),
+		       COALESCE(picture, ''), COALESCE(locale, ''), COALESCE(language, ''),
+		       source_client_id, created_at, metadata, custom_data,
+		       disabled_at, disabled_until, disabled_reason
+		FROM app_user WHERE id = $1
+	`
+	var user repository.User
+	var metadata []byte
+	var customData []byte
 
-	rows, err := r.pool.Query(ctx, query, userID)
+	err := r.pool.QueryRow(ctx, query, userID).Scan(
+		&user.ID, &user.Email, &user.EmailVerified,
+		&user.Name, &user.GivenName, &user.FamilyName, &user.Picture, &user.Locale, &user.Language,
+		&user.SourceClientID, &user.CreatedAt, &metadata, &customData,
+		&user.DisabledAt, &user.DisabledUntil, &user.DisabledReason,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, repository.ErrNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("pg: get user by id: %w", err)
 	}
-	defer rows.Close()
 
-	if !rows.Next() {
-		return nil, repository.ErrNotFound
-	}
-
-	user, err := r.scanUserRow(rows)
-	if err != nil {
-		return nil, fmt.Errorf("pg: scan user: %w", err)
-	}
-
-	return user, nil
-}
-
-// scanUserRow scans a user row with dynamic columns into a repository.User struct.
-func (r *userRepo) scanUserRow(rows pgx.Rows) (*repository.User, error) {
-	cols := rows.FieldDescriptions()
-	vals := make([]any, len(cols))
-	for i := range vals {
-		vals[i] = new(any)
-	}
-
-	if err := rows.Scan(vals...); err != nil {
-		return nil, err
-	}
-
-	var user repository.User
-	user.CustomFields = make(map[string]any)
-
-	for i, col := range cols {
-		val := *(vals[i].(*any))
-		if val == nil {
-			continue
-		}
-		colName := string(col.Name)
-
-		// Helper to convert UUID bytes to string
-		uuidToStr := func(v any) string {
-			if s, ok := v.(string); ok {
-				return s
-			}
-			if b, ok := v.([16]byte); ok {
-				u, err := uuid.FromBytes(b[:])
-				if err != nil {
-					return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
-				}
-				return u.String()
-			}
-			return ""
-		}
-
-		switch colName {
-		case "id":
-			user.ID = uuidToStr(val)
-		case "email":
-			if v, ok := val.(string); ok {
-				user.Email = v
-			}
-		case "email_verified":
-			if v, ok := val.(bool); ok {
-				user.EmailVerified = v
-			}
-		case "name":
-			if v, ok := val.(string); ok {
-				user.Name = v
-			}
-		case "given_name":
-			if v, ok := val.(string); ok {
-				user.GivenName = v
-			}
-		case "family_name":
-			if v, ok := val.(string); ok {
-				user.FamilyName = v
-			}
-		case "picture":
-			if v, ok := val.(string); ok {
-				user.Picture = v
-			}
-		case "locale":
-			if v, ok := val.(string); ok {
-				user.Locale = v
-			}
-		case "language":
-			if v, ok := val.(string); ok {
-				user.Language = v
-			}
-		case "source_client_id":
-			if v, ok := val.(string); ok {
-				user.SourceClientID = &v
-			}
-		case "created_at":
-			if v, ok := val.(time.Time); ok {
-				user.CreatedAt = v
-			}
-		case "disabled_at":
-			if v, ok := val.(time.Time); ok {
-				user.DisabledAt = &v
-			}
-		case "disabled_until":
-			if v, ok := val.(time.Time); ok {
-				user.DisabledUntil = &v
-			}
-		case "disabled_reason":
-			if v, ok := val.(string); ok {
-				user.DisabledReason = &v
-			}
-		case "metadata":
-			// Skip metadata column for now (used internally)
-		default:
-			// Dynamic custom field column
-			user.CustomFields[colName] = val
+	if len(metadata) > 0 {
+		if err := json.Unmarshal(metadata, &user.Metadata); err != nil {
+			log.Printf("WARN: pg: json.Unmarshal metadata for user %s: %v", user.ID, err)
 		}
 	}
+	user.CustomFields = unmarshalCustomData(customData)
 
 	return &user, nil
+}
+
+// unmarshalCustomData deserializes the custom_data JSONB column into a map.
+// Returns an empty (non-nil) map on NULL or invalid JSON.
+func unmarshalCustomData(data []byte) map[string]any {
+	result := make(map[string]any)
+	if len(data) == 0 {
+		return result
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return make(map[string]any)
+	}
+	return result
 }
 
 func (r *userRepo) Create(ctx context.Context, input repository.CreateUserInput) (*repository.User, *repository.Identity, error) {
@@ -389,7 +352,6 @@ func (r *userRepo) Create(ctx context.Context, input repository.CreateUserInput)
 	}
 	defer tx.Rollback(ctx)
 
-	// Crear usuario (tenant_id se guarda en el struct pero no en la DB - cada DB es aislada por tenant)
 	user := &repository.User{
 		TenantID:     input.TenantID,
 		Email:        input.Email,
@@ -405,46 +367,26 @@ func (r *userRepo) Create(ctx context.Context, input repository.CreateUserInput)
 		user.SourceClientID = &input.SourceClientID
 	}
 
-	// Build dynamic INSERT query with custom fields
-	cols := []string{"email", "email_verified", "name", "given_name", "family_name", "picture", "locale", "source_client_id", "created_at"}
-	args := []any{user.Email, false, nullIfEmpty(input.Name), nullIfEmpty(input.GivenName), nullIfEmpty(input.FamilyName), nullIfEmpty(input.Picture), nullIfEmpty(input.Locale), user.SourceClientID, user.CreatedAt}
-
-	// Add custom fields as dynamic columns (sorted for determinism)
-	if len(input.CustomFields) > 0 {
-		keys := make([]string, 0, len(input.CustomFields))
-		for k := range input.CustomFields {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		for _, k := range keys {
-			colName := pgIdentifier(k)
-			if colName == "" || isSystemColumn(colName) {
-				continue // Skip invalid or system columns
-			}
-			cols = append(cols, colName)
-			args = append(args, input.CustomFields[k])
-		}
+	// Ensure custom_data is never nil for JSONB serialization
+	customData := input.CustomFields
+	if customData == nil {
+		customData = make(map[string]any)
 	}
 
-	// Build parameterized query
-	placeholders := make([]string, len(args))
-	for i := range args {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-	}
-
-	insertQuery := fmt.Sprintf(
-		"INSERT INTO app_user (%s) VALUES (%s) RETURNING id",
-		strings.Join(cols, ", "),
-		strings.Join(placeholders, ", "),
-	)
-
-	err = tx.QueryRow(ctx, insertQuery, args...).Scan(&user.ID)
+	const insertUser = `
+		INSERT INTO app_user (email, email_verified, name, given_name, family_name, picture, locale, source_client_id, custom_data, created_at)
+		VALUES ($1, false, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id
+	`
+	err = tx.QueryRow(ctx, insertUser,
+		user.Email, nullIfEmpty(input.Name), nullIfEmpty(input.GivenName),
+		nullIfEmpty(input.FamilyName), nullIfEmpty(input.Picture), nullIfEmpty(input.Locale),
+		user.SourceClientID, customData, user.CreatedAt,
+	).Scan(&user.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pg: insert user: %w", err)
 	}
 
-	// Crear identity con password
 	identity := &repository.Identity{
 		UserID:       user.ID,
 		Provider:     "password",
@@ -473,6 +415,7 @@ func (r *userRepo) Create(ctx context.Context, input repository.CreateUserInput)
 }
 
 func (r *userRepo) CreateBatch(ctx context.Context, tenantID string, users []repository.CreateUserInput) (created, failed int, err error) {
+	// CreateBatch delegates to Create per-user. Each Create uses custom_data JSONB.
 	for _, u := range users {
 		if strings.TrimSpace(u.TenantID) == "" {
 			u.TenantID = tenantID
@@ -487,12 +430,10 @@ func (r *userRepo) CreateBatch(ctx context.Context, tenantID string, users []rep
 }
 
 func (r *userRepo) Update(ctx context.Context, userID string, input repository.UpdateUserInput) error {
-	// Build dynamic UPDATE query
 	setClauses := []string{}
 	args := []any{userID}
 	argIdx := 2
 
-	// System fields with COALESCE (only update if provided)
 	if input.Name != nil {
 		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argIdx))
 		args = append(args, *input.Name)
@@ -520,7 +461,6 @@ func (r *userRepo) Update(ctx context.Context, userID string, input repository.U
 	}
 	if input.SourceClientID != nil {
 		setClauses = append(setClauses, fmt.Sprintf("source_client_id = $%d", argIdx))
-		// Handle empty string as NULL
 		if *input.SourceClientID == "" {
 			args = append(args, nil)
 		} else {
@@ -529,29 +469,19 @@ func (r *userRepo) Update(ctx context.Context, userID string, input repository.U
 		argIdx++
 	}
 
-	// Custom fields as dynamic columns (sorted for determinism)
+	// Merge custom fields into the JSONB column (shallow merge via ||)
 	if len(input.CustomFields) > 0 {
-		keys := make([]string, 0, len(input.CustomFields))
-		for k := range input.CustomFields {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		for _, k := range keys {
-			colName := pgIdentifier(k)
-			if colName == "" || isSystemColumn(colName) {
-				continue // Skip invalid or system columns
-			}
-			setClauses = append(setClauses, fmt.Sprintf("%s = $%d", colName, argIdx))
-			args = append(args, input.CustomFields[k])
-			argIdx++
-		}
+		setClauses = append(setClauses, fmt.Sprintf("custom_data = COALESCE(custom_data, '{}'::jsonb) || $%d::jsonb", argIdx))
+		args = append(args, input.CustomFields)
+		argIdx++
 	}
 
-	// If nothing to update, return early
 	if len(setClauses) == 0 {
 		return nil
 	}
+
+	// Always touch updated_at
+	setClauses = append(setClauses, "updated_at = NOW()")
 
 	query := fmt.Sprintf("UPDATE app_user SET %s WHERE id = $1", strings.Join(setClauses, ", "))
 	_, err := r.pool.Exec(ctx, query, args...)
@@ -745,15 +675,19 @@ func (r *userRepo) List(ctx context.Context, tenantID string, filter repository.
 		offset = 0
 	}
 
-	// Build query with SELECT * to include custom fields
 	var baseQuery string
 	var args []any
 
+	const selectCols = `id, email, email_verified, COALESCE(name,''), COALESCE(given_name,''), COALESCE(family_name,''),
+		COALESCE(picture,''), COALESCE(locale,''), COALESCE(language,''),
+		source_client_id, created_at, metadata, custom_data,
+		disabled_at, disabled_until, disabled_reason`
+
 	if filter.Search != "" {
-		baseQuery = `SELECT * FROM app_user WHERE (email ILIKE $1 OR name ILIKE $1) ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+		baseQuery = `SELECT ` + selectCols + ` FROM app_user WHERE (email ILIKE $1 OR name ILIKE $1) ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 		args = []any{"%" + filter.Search + "%", limit, offset}
 	} else {
-		baseQuery = `SELECT * FROM app_user ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+		baseQuery = `SELECT ` + selectCols + ` FROM app_user ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 		args = []any{limit, offset}
 	}
 
@@ -765,12 +699,27 @@ func (r *userRepo) List(ctx context.Context, tenantID string, filter repository.
 
 	var users []repository.User
 	for rows.Next() {
-		user, err := r.scanUserRow(rows)
-		if err != nil {
+		var u repository.User
+		var metadata []byte
+		var customData []byte
+		u.TenantID = tenantID
+
+		if err := rows.Scan(
+			&u.ID, &u.Email, &u.EmailVerified,
+			&u.Name, &u.GivenName, &u.FamilyName, &u.Picture, &u.Locale, &u.Language,
+			&u.SourceClientID, &u.CreatedAt, &metadata, &customData,
+			&u.DisabledAt, &u.DisabledUntil, &u.DisabledReason,
+		); err != nil {
 			return nil, fmt.Errorf("pg: scan user: %w", err)
 		}
-		user.TenantID = tenantID // Asignar desde parámetro ya que no está en la DB
-		users = append(users, *user)
+
+		if len(metadata) > 0 {
+			if err := json.Unmarshal(metadata, &u.Metadata); err != nil {
+				log.Printf("WARN: pg: json.Unmarshal metadata for user %s: %v", u.ID, err)
+			}
+		}
+		u.CustomFields = unmarshalCustomData(customData)
+		users = append(users, u)
 	}
 
 	return users, rows.Err()

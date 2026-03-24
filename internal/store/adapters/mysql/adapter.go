@@ -191,8 +191,17 @@ func (c *mysqlConnection) NewClaimsRepo(tenantID string) repository.ClaimReposit
 // Migraciones
 // ─────────────────────────────────────────────────────────────────────────────
 
+// GetSQLDB implements store.SQLDBConnection.
+// Returns the underlying *sql.DB as a SQLExecutor for driver-aware migrations.
+func (c *mysqlConnection) GetSQLDB() store.SQLExecutor { return c.db }
+
+// GetDriver implements store.SQLDBConnection.
+func (c *mysqlConnection) GetDriver() string { return "mysql" }
+
 // GetMigrationExecutor implementa store.MigratableConnection.
 // Retorna un wrapper que permite ejecutar migraciones usando database/sql.
+// DEPRECATED: Prefer SQLDBConnection.GetSQLDB() + Migrator.Run() for MySQL.
+// This exists for backward compatibility but RunWithPgxPool uses PG-only SQL.
 func (c *mysqlConnection) GetMigrationExecutor() store.PgxPoolExecutor {
 	return &mysqlMigrationExecutor{db: c.db}
 }

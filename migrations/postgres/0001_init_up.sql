@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS app_user (
   email_verified BOOLEAN NOT NULL DEFAULT false,
   status TEXT NOT NULL DEFAULT 'active',
   metadata JSONB NOT NULL DEFAULT '{}',
+  custom_data JSONB NOT NULL DEFAULT '{}'::jsonb,
   disabled_at TIMESTAMPTZ, disabled_reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, email)

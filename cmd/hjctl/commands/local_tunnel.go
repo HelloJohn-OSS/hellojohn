@@ -159,9 +159,20 @@ func newLocalTunnelCmd() *cobra.Command {
 		Short: "Manage tunnel process",
 	}
 	cmd.AddCommand(newLocalTunnelStatusCmd())
+	cmd.AddCommand(newLocalTunnelStartCmd())
 	cmd.AddCommand(newLocalTunnelStopCmd())
 	cmd.AddCommand(newLocalTunnelLogsCmd())
 	return cmd
+}
+
+// newLocalTunnelStartCmd is an alias for `hjctl local connect` exposed under
+// the `tunnel` subcommand group so that the intuitive `hjctl local tunnel start`
+// just works.
+func newLocalTunnelStartCmd() *cobra.Command {
+	inner := newLocalConnectCmd()
+	inner.Use = "start"
+	inner.Short = "Connect tunnel to HelloJohn Cloud (alias for: hjctl local connect)"
+	return inner
 }
 
 func newLocalTunnelStatusCmd() *cobra.Command {

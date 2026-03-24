@@ -146,6 +146,14 @@ func OpenAdapter(ctx context.Context, cfg AdapterConfig) (AdapterConnection, err
 	return a.Connect(ctx, cfg)
 }
 
+// SQLDBConnection is implemented by adapters that use database/sql (e.g., MySQL).
+// The factory uses this interface to run migrations with the correct driver-aware SQL
+// via Migrator.Run() instead of Migrator.RunWithPgxPool() (which is PostgreSQL-only).
+type SQLDBConnection interface {
+	GetSQLDB() SQLExecutor
+	GetDriver() string
+}
+
 // TenantScopedConnection es implementado por adapters con aislamiento lógico de tenant.
 // El pool base es compartido; ForTenant() retorna una conexión con tenantID fijo
 // en todos los repositorios.

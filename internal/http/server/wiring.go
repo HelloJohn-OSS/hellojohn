@@ -39,6 +39,7 @@ import (
 	pg "github.com/dropDatabas3/hellojohn/internal/store/adapters/pg"
 	"github.com/dropDatabas3/hellojohn/internal/webhook"
 	migrations "github.com/dropDatabas3/hellojohn/migrations/postgres"
+	mysqlmigrations "github.com/dropDatabas3/hellojohn/migrations/mysql"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -122,14 +123,29 @@ func buildV2HandlerInternal() (http.Handler, func() error, store.DataAccessLayer
 	var gdpMigrFS embed.FS
 	var gdpMigrDir string
 	if globalCfg.GlobalDataPlaneDSN != "" {
+		// Normalize driver: "pg" and "" → "pg_shared", "mysql" → "mysql_shared"
+		gdpDriver := globalCfg.GlobalDataPlaneDriver
+		gdpAdapterName := "pg_shared"
+		if gdpDriver == "mysql" {
+			gdpAdapterName = "mysql_shared"
+		}
+
 		globalDataPlaneDB = &store.DBConfig{
-			Driver:       "pg_shared",
+			Driver:       gdpAdapterName,
 			DSN:          globalCfg.GlobalDataPlaneDSN,
 			MaxOpenConns: globalCfg.GlobalDataPlaneMaxOpenConns,
 			MaxIdleConns: globalCfg.GlobalDataPlaneMaxIdleConns,
 		}
-		gdpMigrFS = migrations.GlobalDataPlaneFS
-		gdpMigrDir = migrations.GlobalDataPlaneDir
+
+		// Select migration FS based on driver
+		switch gdpDriver {
+		case "mysql":
+			gdpMigrFS = mysqlmigrations.GlobalDataPlaneFS
+			gdpMigrDir = mysqlmigrations.GlobalDataPlaneDir
+		default: // "pg" or empty → PostgreSQL
+			gdpMigrFS = migrations.GlobalDataPlaneFS
+			gdpMigrDir = migrations.GlobalDataPlaneDir
+		}
 	}
 
 	manager, err := store.NewManager(ctx, store.ManagerConfig{

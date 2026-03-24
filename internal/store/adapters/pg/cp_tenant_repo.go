@@ -70,12 +70,13 @@ func (r *cpTenantRepo) Create(ctx context.Context, tenant *repository.Tenant) er
 	// Enabled no existe en repository.Tenant — todos los creados por este path están habilitados
 	const q = `
 		INSERT INTO cp_tenant (id, slug, name, language, settings, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, true, now(), now())
-		ON CONFLICT (slug) DO UPDATE
-		  SET name=$3, language=$4, settings=$5, updated_at=now()`
+		VALUES ($1, $2, $3, $4, $5, true, now(), now())`
 	_, err = r.pool.Exec(ctx, q,
 		tenant.ID, tenant.Slug, tenant.Name, tenant.Language, string(settingsJSON))
 	if err != nil {
+		if isPgUniqueViolation(err) {
+			return repository.ErrConflict
+		}
 		return fmt.Errorf("cp_tenant_repo: create: %w", err)
 	}
 	return nil
@@ -89,8 +90,8 @@ func (r *cpTenantRepo) Update(ctx context.Context, tenant *repository.Tenant) er
 	const q = `
 		UPDATE cp_tenant
 		SET name=$1, language=$2, settings=$3, updated_at=now()
-		WHERE slug=$4`
-	tag, err := r.pool.Exec(ctx, q, tenant.Name, tenant.Language, string(settingsJSON), tenant.Slug)
+		WHERE id=$4`
+	tag, err := r.pool.Exec(ctx, q, tenant.Name, tenant.Language, string(settingsJSON), tenant.ID)
 	if err != nil {
 		return fmt.Errorf("cp_tenant_repo: update: %w", err)
 	}
@@ -100,9 +101,9 @@ func (r *cpTenantRepo) Update(ctx context.Context, tenant *repository.Tenant) er
 	return nil
 }
 
-func (r *cpTenantRepo) Delete(ctx context.Context, slug string) error {
-	const q = `DELETE FROM cp_tenant WHERE slug = $1`
-	tag, err := r.pool.Exec(ctx, q, slug)
+func (r *cpTenantRepo) Delete(ctx context.Context, id string) error {
+	const q = `DELETE FROM cp_tenant WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, q, id)
 	if err != nil {
 		return fmt.Errorf("cp_tenant_repo: delete: %w", err)
 	}
@@ -112,13 +113,13 @@ func (r *cpTenantRepo) Delete(ctx context.Context, slug string) error {
 	return nil
 }
 
-func (r *cpTenantRepo) UpdateSettings(ctx context.Context, slug string, settings *repository.TenantSettings) error {
+func (r *cpTenantRepo) UpdateSettings(ctx context.Context, id string, settings *repository.TenantSettings) error {
 	settingsJSON, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("cp_tenant_repo: marshal settings: %w", err)
 	}
-	const q = `UPDATE cp_tenant SET settings=$1, updated_at=now() WHERE slug=$2`
-	tag, err := r.pool.Exec(ctx, q, string(settingsJSON), slug)
+	const q = `UPDATE cp_tenant SET settings=$1, updated_at=now() WHERE id=$2`
+	tag, err := r.pool.Exec(ctx, q, string(settingsJSON), id)
 	if err != nil {
 		return fmt.Errorf("cp_tenant_repo: update settings: %w", err)
 	}

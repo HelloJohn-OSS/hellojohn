@@ -605,7 +605,7 @@ func buildTenantClaims(entries []repository.TenantAccessEntry) []jwtx.TenantAcce
 		if role == "" {
 			role = "member"
 		}
-		out = append(out, jwtx.TenantAccessClaim{Slug: e.TenantSlug, Role: role})
+		out = append(out, jwtx.TenantAccessClaim{ID: e.TenantID, Role: role})
 	}
 	return out
 }

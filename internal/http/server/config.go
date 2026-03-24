@@ -164,7 +164,8 @@ type GlobalConfig struct {
 	AdminBootstrapEmail    string // HELLOJOHN_ADMIN_EMAIL
 	AdminBootstrapPassword string // HELLOJOHN_ADMIN_PASSWORD
 
-	// Global Data Plane (Shared DB con RLS)
+	// Global Data Plane (Shared DB — RLS on PG, WHERE tenant_id on MySQL)
+	GlobalDataPlaneDriver       string // GLOBAL_DATA_PLANE_DRIVER "pg" | "mysql" (default "pg")
 	GlobalDataPlaneDSN          string // GLOBAL_DATA_PLANE_DSN
 	GlobalDataPlaneMaxOpenConns int    // GLOBAL_DATA_PLANE_MAX_OPEN_CONNS (default 25)
 	GlobalDataPlaneMaxIdleConns int    // GLOBAL_DATA_PLANE_MAX_IDLE_CONNS (default 5)
@@ -389,6 +390,7 @@ func LoadGlobalConfig() GlobalConfig {
 	adminBootstrapPassword := strings.TrimSpace(os.Getenv("HELLOJOHN_ADMIN_PASSWORD"))
 
 	// Global Data Plane (EPIC GDP)
+	gdpDriver := getenvStringFirst([]string{"GLOBAL_DATA_PLANE_DRIVER"}, "pg")
 	gdpDSN := strings.TrimSpace(os.Getenv("GLOBAL_DATA_PLANE_DSN"))
 	gdpMaxOpen := getenvIntDefault("GLOBAL_DATA_PLANE_MAX_OPEN_CONNS", 25)
 	gdpMaxIdle := getenvIntDefault("GLOBAL_DATA_PLANE_MAX_IDLE_CONNS", 5)
@@ -550,6 +552,7 @@ func LoadGlobalConfig() GlobalConfig {
 		SigningMasterKey:   signingMasterKey,
 		SecretboxMasterKey: secretboxMasterKey,
 
+		GlobalDataPlaneDriver:       gdpDriver,
 		GlobalDataPlaneDSN:          gdpDSN,
 		GlobalDataPlaneMaxOpenConns: gdpMaxOpen,
 		GlobalDataPlaneMaxIdleConns: gdpMaxIdle,

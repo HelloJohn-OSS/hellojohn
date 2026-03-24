@@ -9,6 +9,7 @@ package dal
 import (
 	_ "github.com/dropDatabas3/hellojohn/internal/store/adapters/fs"
 	_ "github.com/dropDatabas3/hellojohn/internal/store/adapters/mysql"
+	_ "github.com/dropDatabas3/hellojohn/internal/store/adapters/mysql_shared"
 	_ "github.com/dropDatabas3/hellojohn/internal/store/adapters/pg"
 	_ "github.com/dropDatabas3/hellojohn/internal/store/adapters/pg_shared"
 )

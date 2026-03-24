@@ -238,22 +238,27 @@ func (r *tenantRepo) Update(ctx context.Context, tenant *repository.Tenant) erro
 	return os.WriteFile(r.conn.tenantFile(tenant.Slug), data, 0600)
 }
 
-func (r *tenantRepo) Delete(ctx context.Context, slug string) error {
+func (r *tenantRepo) Delete(ctx context.Context, id string) error {
 	r.conn.mu.Lock()
 	defer r.conn.mu.Unlock()
 
-	tenantPath := r.conn.tenantPath(slug)
-	if _, err := os.Stat(tenantPath); os.IsNotExist(err) {
-		return repository.ErrNotFound
+	slug, err := r.resolveSlugByID(id)
+	if err != nil {
+		return err
 	}
-
+	tenantPath := r.conn.tenantPath(slug)
 	return os.RemoveAll(tenantPath)
 }
 
-func (r *tenantRepo) UpdateSettings(ctx context.Context, slug string, settings *repository.TenantSettings) error {
+func (r *tenantRepo) UpdateSettings(ctx context.Context, id string, settings *repository.TenantSettings) error {
 	// Acquire write lock for the entire read-modify-write to prevent lost-update races.
 	r.conn.mu.Lock()
 	defer r.conn.mu.Unlock()
+
+	slug, err := r.resolveSlugByID(id)
+	if err != nil {
+		return err
+	}
 
 	data, err := os.ReadFile(r.conn.tenantFile(slug))
 	if err != nil {
@@ -275,6 +280,34 @@ func (r *tenantRepo) UpdateSettings(ctx context.Context, slug string, settings *
 		return fmt.Errorf("fs: UpdateSettings marshal: %w", err)
 	}
 	return os.WriteFile(r.conn.tenantFile(slug), marshalData, 0600)
+}
+
+// resolveSlugByID scans tenant directories to find the slug for a given UUID.
+// MUST be called while holding conn.mu (read or write) — does NOT acquire locks itself.
+func (r *tenantRepo) resolveSlugByID(id string) (string, error) {
+	tenantsDir := filepath.Join(r.conn.root, "tenants")
+	entries, err := os.ReadDir(tenantsDir)
+	if err != nil {
+		return "", fmt.Errorf("fs: resolve slug by id: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		slug := entry.Name()
+		data, err := os.ReadFile(r.conn.tenantFile(slug))
+		if err != nil {
+			continue
+		}
+		var raw tenantYAML
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			continue
+		}
+		if raw.ID == id {
+			return slug, nil
+		}
+	}
+	return "", repository.ErrNotFound
 }
 
 // ─── ClientRepository ───

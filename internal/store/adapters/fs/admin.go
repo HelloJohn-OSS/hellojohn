@@ -71,7 +71,7 @@ func (r *adminRepo) readAdmins() ([]repository.Admin, error) {
 		if len(admin.AssignedTenants) > 0 && len(admin.TenantAccess) == 0 {
 			entries := make([]repository.TenantAccessEntry, len(admin.AssignedTenants))
 			for j, slug := range admin.AssignedTenants {
-				entries[j] = repository.TenantAccessEntry{TenantSlug: slug, Role: "owner"}
+				entries[j] = repository.TenantAccessEntry{TenantID: slug, Role: "owner"}
 			}
 			file.Admins[i].TenantAccess = entries
 		}
@@ -368,7 +368,7 @@ func (r *adminRepo) UpdateLastSeen(ctx context.Context, id string) error {
 func (r *adminRepo) AssignTenants(ctx context.Context, adminID string, tenantIDs []string) error {
 	entries := make([]repository.TenantAccessEntry, len(tenantIDs))
 	for i, slug := range tenantIDs {
-		entries[i] = repository.TenantAccessEntry{TenantSlug: slug, Role: "owner"}
+		entries[i] = repository.TenantAccessEntry{TenantID: slug, Role: "owner"}
 	}
 	_, err := r.Update(ctx, adminID, repository.UpdateAdminInput{
 		TenantAccess: &entries,
@@ -390,7 +390,7 @@ func (r *adminRepo) HasAccessToTenant(ctx context.Context, adminID, tenantID str
 
 	// Admins de tenant solo tienen acceso a sus tenants asignados
 	for _, entry := range admin.TenantAccess {
-		if entry.TenantSlug == tenantID {
+		if entry.TenantID == tenantID {
 			return true, nil
 		}
 	}

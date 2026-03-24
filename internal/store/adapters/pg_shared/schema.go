@@ -22,7 +22,7 @@ type sharedSchemaRepo struct {
 	tenantID uuid.UUID
 }
 
-var sharedValidIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+var sharedValidIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,49}$`)
 
 // sharedPgIdentifier normalizes a field name into a safe PG identifier.
 func sharedPgIdentifier(raw string) string {
@@ -73,7 +73,8 @@ func sharedIsSystemColumn(name string) bool {
 	case "id", "tenant_id", "email", "email_verified", "status", "profile", "metadata",
 		"disabled_at", "disabled_reason", "disabled_until",
 		"created_at", "updated_at", "password_hash",
-		"name", "given_name", "family_name", "picture", "locale", "language", "source_client_id":
+		"name", "given_name", "family_name", "picture", "locale", "language", "source_client_id",
+		"custom_data":
 		return true
 	}
 	return false
@@ -99,98 +100,142 @@ func (r *sharedSchemaRepo) SyncUserFields(ctx context.Context, _ string, fields 
 		return fmt.Errorf("pg_shared schema repo: connection not initialized")
 	}
 
-	// 1. Get existing columns
+	// Use first 8 hex chars of UUID (without dashes) as short tenant hash.
+	// This keeps generated column names under 63-byte PG identifier limit:
+	// cf_ (3) + 8 chars + _ (1) + fieldName (up to 50) = 62 max.
+	tenantStr := strings.ReplaceAll(r.tenantID.String(), "-", "")[:8]
+
+	// 1. Ensure custom_data JSONB column exists (idempotent)
+	if _, err := r.pool.Exec(ctx,
+		`ALTER TABLE app_user ADD COLUMN IF NOT EXISTS custom_data JSONB DEFAULT '{}'::jsonb`,
+	); err != nil {
+		return fmt.Errorf("pg_shared: ensure custom_data column: %w", err)
+	}
+
+	// 2. Get existing generated columns for THIS tenant (cf_{tenant}_{field} pattern)
+	prefix := "cf_" + tenantStr + "_"
+	existingGenCols := make(map[string]bool)
 	rows, err := r.pool.Query(ctx, `
 		SELECT column_name
 		FROM information_schema.columns
 		WHERE table_name = 'app_user'
 		  AND table_schema = 'public'
-	`)
+		  AND column_name LIKE $1
+	`, prefix+"%")
 	if err != nil {
-		return fmt.Errorf("pg_shared: failed to get existing columns: %w", err)
+		return fmt.Errorf("pg_shared: get existing generated columns: %w", err)
 	}
 	defer rows.Close()
-
-	existingCols := make(map[string]bool)
 	for rows.Next() {
 		var col string
 		if err := rows.Scan(&col); err != nil {
 			return err
 		}
-		existingCols[col] = true
+		existingGenCols[col] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 
-	// 2. Apply field changes inside a transaction so partial DDL is rolled back on failure.
-	// PostgreSQL DDL is transactional — ALTER TABLE, ADD CONSTRAINT, CREATE/DROP INDEX
-	// are all rolled back atomically if the transaction aborts.
+	// 3. Apply field changes inside a transaction (PostgreSQL DDL is transactional)
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("pg_shared: begin schema tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	newFieldNames := make(map[string]bool)
+	desiredGenCols := make(map[string]bool)
 	for _, field := range fields {
 		fieldName := sharedPgIdentifier(field.Name)
 		if fieldName == "" {
 			log.Printf("pg_shared tenant %s: Skipping invalid field name: %s", r.tenantID, field.Name)
 			continue
 		}
-		newFieldNames[fieldName] = true
-
 		if sharedIsSystemColumn(fieldName) {
 			continue
 		}
 
+		genCol := fmt.Sprintf("cf_%s_%s", tenantStr, fieldName)
 		sqlType := sharedMapFieldTypeToSQL(field.Type)
-		if sqlType == "" {
-			log.Printf("pg_shared tenant %s: Unknown field type %s for field %s", r.tenantID, field.Type, fieldName)
-			continue
-		}
 
-		if !existingCols[fieldName] {
-			log.Printf("pg_shared tenant %s: Adding column %s (%s)", r.tenantID, fieldName, sqlType)
-			query := fmt.Sprintf("ALTER TABLE app_user ADD COLUMN IF NOT EXISTS %s %s", fieldName, sqlType)
-			if _, err := tx.Exec(ctx, query); err != nil {
-				return fmt.Errorf("pg_shared: failed to add column %s: %w", fieldName, err)
-			}
-		}
-
-		// Drop NOT NULL for social login compat
-		if _, err := tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user ALTER COLUMN %s DROP NOT NULL", fieldName)); err != nil {
-			log.Printf("[WARN] pg_shared: drop not null for %s: %v", fieldName, err)
-		}
-
-		// UNIQUE constraint (tenant-scoped for shared table)
-		// NOTE: Replace hyphens with underscores — PostgreSQL identifiers cannot contain hyphens.
-		tenantStr := strings.ReplaceAll(r.tenantID.String(), "-", "_")
-		uqName := fmt.Sprintf("uq_app_user_%s_%s", tenantStr, fieldName)
 		if field.Unique {
-			query := fmt.Sprintf("ALTER TABLE app_user ADD CONSTRAINT %s UNIQUE (tenant_id, %s)", uqName, fieldName)
+			// Unique: generated stored column + UNIQUE(tenant_id, cf_col)
+			desiredGenCols[genCol] = true
+
+			if !existingGenCols[genCol] {
+				log.Printf("pg_shared tenant %s: Adding generated column %s for unique field %s", r.tenantID, genCol, fieldName)
+				query := fmt.Sprintf(
+					"ALTER TABLE app_user ADD COLUMN %s %s GENERATED ALWAYS AS (custom_data->>'%s') STORED",
+					genCol, sqlType, fieldName,
+				)
+				if _, err := tx.Exec(ctx, query); err != nil {
+					return fmt.Errorf("pg_shared: add generated column %s: %w", genCol, err)
+				}
+			}
+
+			uqName := fmt.Sprintf("uq_cf_%s_%s", tenantStr, fieldName)
+			query := fmt.Sprintf("ALTER TABLE app_user ADD CONSTRAINT %s UNIQUE (tenant_id, %s)", uqName, genCol)
 			_, err := tx.Exec(ctx, query)
 			if err != nil && !strings.Contains(err.Error(), "already exists") {
 				log.Printf("pg_shared tenant %s: Failed to add unique constraint %s: %v", r.tenantID, uqName, err)
 			}
-		} else {
-			_, _ = tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user DROP CONSTRAINT IF EXISTS %s", uqName))
-		}
 
-		// INDEX (tenant-scoped for efficient queries)
-		idxName := fmt.Sprintf("idx_app_user_%s_%s", tenantStr, fieldName)
-		if field.Indexed && !field.Unique {
-			query := fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON app_user (tenant_id, %s)", idxName, fieldName)
-			if _, err := tx.Exec(ctx, query); err != nil {
-				log.Printf("pg_shared tenant %s: Failed to create index %s: %v", r.tenantID, idxName, err)
-			}
-		} else if !field.Indexed {
+			// Drop expression index if field changed from indexed to unique
+			idxName := fmt.Sprintf("idx_cf_%s_%s", tenantStr, fieldName)
 			_, _ = tx.Exec(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s", idxName))
+
+		} else if field.Indexed {
+			// Indexed (non-unique): partial expression index scoped to this tenant
+			idxName := fmt.Sprintf("idx_cf_%s_%s", tenantStr, fieldName)
+			query := fmt.Sprintf(
+				"CREATE INDEX IF NOT EXISTS %s ON app_user ((custom_data->>'%s')) WHERE tenant_id = '%s'",
+				idxName, fieldName, r.tenantID.String(),
+			)
+			if _, err := tx.Exec(ctx, query); err != nil {
+				log.Printf("pg_shared tenant %s: Failed to create expression index %s: %v", r.tenantID, idxName, err)
+			}
+
+			// Drop unique constraint + generated column if field changed from unique to indexed
+			uqName := fmt.Sprintf("uq_cf_%s_%s", tenantStr, fieldName)
+			_, _ = tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user DROP CONSTRAINT IF EXISTS %s", uqName))
+			if existingGenCols[genCol] {
+				_, _ = tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user DROP COLUMN IF EXISTS %s", genCol))
+			}
+		} else {
+			// Plain field — clean up constraints/columns
+			idxName := fmt.Sprintf("idx_cf_%s_%s", tenantStr, fieldName)
+			_, _ = tx.Exec(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s", idxName))
+			uqName := fmt.Sprintf("uq_cf_%s_%s", tenantStr, fieldName)
+			_, _ = tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user DROP CONSTRAINT IF EXISTS %s", uqName))
+			if existingGenCols[genCol] {
+				_, _ = tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user DROP COLUMN IF EXISTS %s", genCol))
+			}
 		}
 	}
 
-	// 3. In shared mode, NEVER drop columns — other tenants may use them.
-	// Custom columns accumulate; cleanup requires explicit admin action.
-	// This is a fundamental constraint of shared-table multi-tenancy.
-	// (Isolated pg adapter can safely drop columns since it owns the table.)
+	// 4. Drop generated columns for fields removed from definition.
+	// Generated columns are derived from custom_data — safe to drop (no data loss).
+	allValidGenCols := make(map[string]bool)
+	for _, field := range fields {
+		fieldName := sharedPgIdentifier(field.Name)
+		if fieldName != "" {
+			allValidGenCols[fmt.Sprintf("cf_%s_%s", tenantStr, fieldName)] = true
+		}
+	}
+	for col := range existingGenCols {
+		if !allValidGenCols[col] {
+			log.Printf("pg_shared tenant %s: Dropping removed generated column %s", r.tenantID, col)
+			// Extract field name from cf_{tenant}_{field}
+			fieldName := strings.TrimPrefix(col, prefix)
+			uqName := fmt.Sprintf("uq_cf_%s_%s", tenantStr, fieldName)
+			_, _ = tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user DROP CONSTRAINT IF EXISTS %s", uqName))
+			idxName := fmt.Sprintf("idx_cf_%s_%s", tenantStr, fieldName)
+			_, _ = tx.Exec(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s", idxName))
+			if _, err := tx.Exec(ctx, fmt.Sprintf("ALTER TABLE app_user DROP COLUMN IF EXISTS %s", col)); err != nil {
+				return fmt.Errorf("pg_shared: drop generated column %s: %w", col, err)
+			}
+		}
+	}
 
 	return tx.Commit(ctx)
 }

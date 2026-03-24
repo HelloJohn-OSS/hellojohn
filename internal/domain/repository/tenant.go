@@ -13,6 +13,7 @@ type Tenant struct {
 	DisplayName string
 	Language    string // Idioma por defecto del tenant ("es", "en")
 	Settings    TenantSettings
+	CreatedBy   string // UUID of the admin who created this tenant (empty for legacy/seed tenants)
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -276,11 +277,12 @@ type TenantRepository interface {
 	Update(ctx context.Context, tenant *Tenant) error
 
 	// Delete elimina un tenant y toda su configuración.
-	Delete(ctx context.Context, slug string) error
+	// id es el UUID del tenant.
+	Delete(ctx context.Context, id string) error
 
 	// UpdateSettings actualiza solo los settings de un tenant.
-	// Cifra automáticamente campos sensibles.
-	UpdateSettings(ctx context.Context, slug string, settings *TenantSettings) error
+	// id es el UUID del tenant. Cifra automáticamente campos sensibles.
+	UpdateSettings(ctx context.Context, id string, settings *TenantSettings) error
 }
 
 // ConsentPolicySettings configuración de políticas de consentimiento.

@@ -333,7 +333,7 @@ func buildTenantClaims(entries []repository.TenantAccessEntry) []jwt.TenantAcces
 		if role == "" {
 			role = "member" // default seguro
 		}
-		out = append(out, jwt.TenantAccessClaim{Slug: e.TenantSlug, Role: role})
+		out = append(out, jwt.TenantAccessClaim{ID: e.TenantID, Role: role})
 	}
 	return out
 }

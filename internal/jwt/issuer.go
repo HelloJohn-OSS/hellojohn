@@ -519,16 +519,16 @@ func (i *Issuer) VerifyAdminAccess(ctx context.Context, token string) (*AdminAcc
 			for _, t := range v {
 				switch entry := t.(type) {
 				case map[string]interface{}:
-					// Nuevo formato: {"slug": "acme", "role": "owner"}
-					slug, _ := entry["slug"].(string)
+					// Nuevo formato: {"tenant_id": "uuid", "role": "owner"}
+					id, _ := entry["tenant_id"].(string)
 					role, _ := entry["role"].(string)
-					if slug != "" {
-						claims.Tenants = append(claims.Tenants, TenantAccessClaim{Slug: slug, Role: role})
+					if id != "" {
+						claims.Tenants = append(claims.Tenants, TenantAccessClaim{ID: id, Role: role})
 					}
 				case string:
 					// Legacy formato: solo el slug — asignar role "owner" por backward compat
 					if entry != "" {
-						claims.Tenants = append(claims.Tenants, TenantAccessClaim{Slug: entry, Role: "owner"})
+						claims.Tenants = append(claims.Tenants, TenantAccessClaim{ID: entry, Role: "owner"})
 					}
 				}
 			}

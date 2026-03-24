@@ -22,13 +22,13 @@ import (
 //     en CloudScopeBlockedPaths (creación de API keys, gestión de cluster y rotación
 //     de signing keys). Diseñado para el panel cloud de HelloJohn.
 //
-//   - "tenant:{slug}" (dinámico): restringe el acceso al tenant específico.
+//   - "tenant:{uuid}" (dinámico): restringe el acceso al tenant específico.
 //     Usar strings.HasPrefix(scope, "tenant:") para detectar este scope.
 const (
 	APIKeyScopeAdmin    = "admin"
 	APIKeyScopeReadOnly = "readonly"
 	APIKeyScopeCloud    = "cloud"
-	// "tenant:{slug}" es dinámico — usar strings.HasPrefix(scope, "tenant:")
+	// "tenant:{uuid}" es dinámico — usar strings.HasPrefix(scope, "tenant:")
 )
 
 // CloudScopeBlockedPaths son los paths bloqueados para keys con scope=cloud.
@@ -48,7 +48,7 @@ type APIKey struct {
 	Name       string
 	KeyPrefix  string // Primeros 14 chars del token raw (para identificación visual)
 	KeyHash    string `json:"-"` // "sha256:{64 hex chars}" — NUNCA el token en claro; omitido de toda serialización JSON
-	Scope      string // "admin" | "readonly" | "cloud" | "tenant:{slug}"
+	Scope      string // "admin" | "readonly" | "cloud" | "tenant:{uuid}"
 	CreatedBy  string // Email del admin que la creó
 	CreatedAt  time.Time
 	LastUsedAt *time.Time // nil hasta primer uso
@@ -67,8 +67,8 @@ func (k *APIKey) IsActive() bool {
 	return true
 }
 
-// TenantSlug extrae el slug si el scope es "tenant:{slug}". Retorna "" si no aplica.
-func (k *APIKey) TenantSlug() string {
+// TenantID extrae el UUID del tenant si el scope es "tenant:{uuid}". Retorna "" si no aplica.
+func (k *APIKey) TenantID() string {
 	if strings.HasPrefix(k.Scope, "tenant:") {
 		return strings.TrimPrefix(k.Scope, "tenant:")
 	}

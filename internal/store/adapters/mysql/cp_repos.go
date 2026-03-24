@@ -12,12 +12,19 @@ import (
 	"strings"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 
 	"github.com/dropDatabas3/hellojohn/internal/domain/repository"
 	"github.com/dropDatabas3/hellojohn/internal/security/password"
 	"github.com/dropDatabas3/hellojohn/internal/security/secretbox"
 )
+
+// isMySQLDuplicateEntry detecta violaciones de UNIQUE/PK constraint (error 1062).
+func isMySQLDuplicateEntry(err error) bool {
+	var mysqlErr *gomysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // cpTenantRepoMySQL
@@ -59,11 +66,12 @@ func (r *cpTenantRepoMySQL) Create(ctx context.Context, tenant *repository.Tenan
 		return fmt.Errorf("mysql_cp_tenant: marshal: %w", err)
 	}
 	const q = `INSERT INTO cp_tenant (id, slug, name, language, settings, enabled, created_at, updated_at)
-	            VALUES (?,?,?,?,?,1,NOW(6),NOW(6))
-	            ON DUPLICATE KEY UPDATE name=VALUES(name), language=VALUES(language),
-	            settings=VALUES(settings), updated_at=NOW(6)`
+	            VALUES (?,?,?,?,?,1,NOW(6),NOW(6))`
 	_, err = r.db.ExecContext(ctx, q, tenant.ID, tenant.Slug, tenant.Name, tenant.Language, settingsJSON)
 	if err != nil {
+		if isMySQLDuplicateEntry(err) {
+			return repository.ErrConflict
+		}
 		return fmt.Errorf("mysql_cp_tenant: create: %w", err)
 	}
 	return nil
@@ -74,8 +82,8 @@ func (r *cpTenantRepoMySQL) Update(ctx context.Context, tenant *repository.Tenan
 	if err != nil {
 		return fmt.Errorf("mysql_cp_tenant: marshal: %w", err)
 	}
-	const q = `UPDATE cp_tenant SET name=?,language=?,settings=?,updated_at=NOW(6) WHERE slug=?`
-	res, err := r.db.ExecContext(ctx, q, tenant.Name, tenant.Language, settingsJSON, tenant.Slug)
+	const q = `UPDATE cp_tenant SET name=?,language=?,settings=?,updated_at=NOW(6) WHERE id=?`
+	res, err := r.db.ExecContext(ctx, q, tenant.Name, tenant.Language, settingsJSON, tenant.ID)
 	if err != nil {
 		return fmt.Errorf("mysql_cp_tenant: update: %w", err)
 	}
@@ -86,9 +94,9 @@ func (r *cpTenantRepoMySQL) Update(ctx context.Context, tenant *repository.Tenan
 	return nil
 }
 
-func (r *cpTenantRepoMySQL) Delete(ctx context.Context, slug string) error {
-	const q = `DELETE FROM cp_tenant WHERE slug=?`
-	res, err := r.db.ExecContext(ctx, q, slug)
+func (r *cpTenantRepoMySQL) Delete(ctx context.Context, id string) error {
+	const q = `DELETE FROM cp_tenant WHERE id=?`
+	res, err := r.db.ExecContext(ctx, q, id)
 	if err != nil {
 		return fmt.Errorf("mysql_cp_tenant: delete: %w", err)
 	}
@@ -99,13 +107,13 @@ func (r *cpTenantRepoMySQL) Delete(ctx context.Context, slug string) error {
 	return nil
 }
 
-func (r *cpTenantRepoMySQL) UpdateSettings(ctx context.Context, slug string, settings *repository.TenantSettings) error {
+func (r *cpTenantRepoMySQL) UpdateSettings(ctx context.Context, id string, settings *repository.TenantSettings) error {
 	settingsJSON, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("mysql_cp_tenant: marshal: %w", err)
 	}
-	const q = `UPDATE cp_tenant SET settings=?,updated_at=NOW(6) WHERE slug=?`
-	res, err := r.db.ExecContext(ctx, q, settingsJSON, slug)
+	const q = `UPDATE cp_tenant SET settings=?,updated_at=NOW(6) WHERE id=?`
+	res, err := r.db.ExecContext(ctx, q, settingsJSON, id)
 	if err != nil {
 		return fmt.Errorf("mysql_cp_tenant: update settings: %w", err)
 	}
@@ -224,14 +232,14 @@ func (r *cpClientRepoMySQL) Create(ctx context.Context, input repository.ClientI
 	}
 	const q = `INSERT INTO cp_client
 		(tenant_id,client_id,name,type,secret_enc,settings,redirect_uris,allowed_scopes,enabled,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,1,NOW(6),NOW(6))
-		ON DUPLICATE KEY UPDATE name=VALUES(name),type=VALUES(type),
-		  secret_enc=COALESCE(VALUES(secret_enc),secret_enc),settings=VALUES(settings),
-		  redirect_uris=VALUES(redirect_uris),allowed_scopes=VALUES(allowed_scopes),updated_at=NOW(6)`
+		VALUES (?,?,?,?,?,?,?,?,1,NOW(6),NOW(6))`
 	_, err = r.db.ExecContext(ctx, q,
 		r.tenantID, input.ClientID, input.Name, input.Type,
 		secretEnc, settingsJSON, redirectJSON, scopesJSON)
 	if err != nil {
+		if isMySQLDuplicateEntry(err) {
+			return nil, repository.ErrConflict
+		}
 		return nil, fmt.Errorf("mysql_cp_client: create: %w", err)
 	}
 	return r.Get(ctx, input.ClientID)
@@ -802,7 +810,7 @@ func (r *cpAdminRepoMySQL) GetByEmail(ctx context.Context, email string) (*repos
 func (r *cpAdminRepoMySQL) Create(ctx context.Context, input repository.CreateAdminInput) (*repository.Admin, error) {
 	tenantSlugs := make([]string, len(input.TenantAccess))
 	for i, e := range input.TenantAccess {
-		tenantSlugs[i] = e.TenantSlug
+		tenantSlugs[i] = e.TenantID
 	}
 	tenantIDsJSON, _ := json.Marshal(tenantSlugs)
 	adminType := string(input.Type)
@@ -840,7 +848,7 @@ func (r *cpAdminRepoMySQL) Update(ctx context.Context, id string, input reposito
 	if input.TenantAccess != nil {
 		slugs := make([]string, len(*input.TenantAccess))
 		for i, e := range *input.TenantAccess {
-			slugs[i] = e.TenantSlug
+			slugs[i] = e.TenantID
 		}
 		j, _ := json.Marshal(slugs)
 		setClauses = append(setClauses, "tenant_ids=?")
@@ -1000,7 +1008,7 @@ func (r *cpAdminRepoMySQL) scanRow(row interface {
 	a.AssignedTenants = slugs
 	a.TenantAccess = make([]repository.TenantAccessEntry, len(slugs))
 	for i, s := range slugs {
-		a.TenantAccess[i] = repository.TenantAccessEntry{TenantSlug: s, Role: "owner"}
+		a.TenantAccess[i] = repository.TenantAccessEntry{TenantID: s, Role: "owner"}
 	}
 	return &a, nil
 }

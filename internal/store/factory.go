@@ -27,8 +27,8 @@ type Factory struct {
 	gdpMigrator     *Migrator                    // migrator para Global Data Plane schema
 	cluster         repository.ClusterRepository // opcional, para replicación
 
-	// tenantCaches cachea clientes Redis por slug de tenant (MED-9: evitar leak de conexiones)
-	tenantCaches sync.Map // map[slug]cache.Client
+	// tenantCaches cachea clientes Redis por UUID de tenant (MED-9: evitar leak de conexiones)
+	tenantCaches sync.Map // map[uuid]cache.Client
 }
 
 // FactoryConfig configuración para crear el Factory.
@@ -178,8 +178,13 @@ func NewFactory(ctx context.Context, cfg FactoryConfig) (*Factory, error) {
 
 	// Conectar Global Data Plane si está configurado y el modo lo soporta
 	if cfg.GlobalDataPlaneDB != nil && cfg.GlobalDataPlaneDB.Valid() && mode.SupportsGlobalDP() {
+		// Detect adapter name from driver: "postgres" → "pg_shared", "mysql" → "mysql_shared"
+		gdpAdapterName := "pg_shared"
+		if cfg.GlobalDataPlaneDB.Driver == "mysql" {
+			gdpAdapterName = "mysql_shared"
+		}
 		gdpConn, err := OpenAdapter(ctx, AdapterConfig{
-			Name:         "pg_shared",
+			Name:         gdpAdapterName,
 			DSN:          cfg.GlobalDataPlaneDB.DSN,
 			MaxOpenConns: cfg.GlobalDataPlaneDB.MaxOpenConns,
 			MaxIdleConns: cfg.GlobalDataPlaneDB.MaxIdleConns,
@@ -193,22 +198,19 @@ func NewFactory(ctx context.Context, cfg FactoryConfig) (*Factory, error) {
 		}
 		f.globalDataPlane = gdpConn
 		if cfg.Logger != nil {
-			cfg.Logger.Printf("store: Global Data Plane connected (pg_shared)")
+			cfg.Logger.Printf("store: Global Data Plane connected (%s)", gdpAdapterName)
 		}
 
 		// Auto-migrate GDP schema
 		if cfg.GlobalDataPlaneMigrationsDir != "" {
 			f.gdpMigrator = NewMigrator(cfg.GlobalDataPlaneMigrationsFS, cfg.GlobalDataPlaneMigrationsDir)
-			if migratable, ok := gdpConn.(MigratableConnection); ok {
-				executor := migratable.GetMigrationExecutor()
-				if _, err := f.gdpMigrator.RunWithPgxPool(ctx, executor); err != nil {
-					// GDP migration failure is FATAL — a GDP without schema causes silent data errors at runtime.
-					cleanup()
-					return nil, fmt.Errorf("factory: GDP auto-migration failed: %w", err)
-				}
-				if cfg.Logger != nil {
-					cfg.Logger.Printf("store: GDP migrations applied successfully")
-				}
+			if _, err := runMigrationsOnConn(ctx, f.gdpMigrator, gdpConn); err != nil {
+				// GDP migration failure is FATAL — a GDP without schema causes silent data errors at runtime.
+				cleanup()
+				return nil, fmt.Errorf("factory: GDP auto-migration failed: %w", err)
+			}
+			if cfg.Logger != nil {
+				cfg.Logger.Printf("store: GDP migrations applied successfully")
 			}
 		}
 	}
@@ -216,31 +218,34 @@ func NewFactory(ctx context.Context, cfg FactoryConfig) (*Factory, error) {
 	return f, nil
 }
 
+// runMigrationsOnConn applies migrations against a connection, detecting whether
+// to use the database/sql path (MySQL) or pgxpool path (PostgreSQL).
+// This replaces direct calls to RunWithPgxPool which hardcodes PG-only SQL.
+func runMigrationsOnConn(ctx context.Context, migrator *Migrator, conn AdapterConnection) (*MigrationResult, error) {
+	// MySQL path: use Migrator.Run() with driver-aware SQL (?, DATETIME, etc.)
+	if sqlConn, ok := conn.(SQLDBConnection); ok {
+		return migrator.Run(ctx, sqlConn.GetSQLDB(), sqlConn.GetDriver())
+	}
+
+	// PostgreSQL path: use RunWithPgxPool via MigratableConnection.
+	if migratable, ok := conn.(MigratableConnection); ok {
+		executor := migratable.GetMigrationExecutor()
+		if executor == nil {
+			return &MigrationResult{}, nil
+		}
+		return migrator.RunWithPgxPool(ctx, executor)
+	}
+
+	// Connection doesn't support migrations (e.g., FS adapter).
+	return &MigrationResult{}, nil
+}
+
 // runGlobalMigrations aplica las migraciones del schema de la Global DB.
 // Es idempotente: usa CREATE TABLE IF NOT EXISTS en los SQLs.
 // Solo se llama cuando globalDBConn != nil y cfg.GlobalMigrationsDir != "".
 func (f *Factory) runGlobalMigrations(ctx context.Context, cfg FactoryConfig) error {
 	globalMigrator := NewMigrator(cfg.GlobalMigrationsFS, cfg.GlobalMigrationsDir)
-
-	// Usar MigratableConnection — la misma interfaz que usan las migraciones
-	// de tenant y GDP. El pg adapter la implementa via GetMigrationExecutor().
-	migratable, ok := f.globalDBConn.(MigratableConnection)
-	if !ok {
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("store: global DB adapter does not implement MigratableConnection — skipping auto-migration")
-		}
-		return nil
-	}
-
-	executor := migratable.GetMigrationExecutor()
-	if executor == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("store: global DB GetMigrationExecutor returned nil — skipping auto-migration")
-		}
-		return nil
-	}
-
-	_, err := globalMigrator.RunWithPgxPool(ctx, executor)
+	_, err := runMigrationsOnConn(ctx, globalMigrator, f.globalDBConn)
 	return err
 }
 
@@ -308,7 +313,7 @@ func (f *Factory) ForTenant(ctx context.Context, slugOrID string) (TenantDataAcc
 }
 
 // InvalidateTenantCache es un no-op en Factory porque no utiliza caché en RAM.
-func (f *Factory) InvalidateTenantCache(slug string) {
+func (f *Factory) InvalidateTenantCache(tenantID string) {
 	// No-op
 }
 
@@ -395,32 +400,20 @@ func (f *Factory) MigrateTenant(ctx context.Context, slugOrID string) (*Migratio
 		return nil, ErrNoDBForTenant
 	}
 
-	// Verificar si la conexión soporta migraciones
-	migratable, ok := dataConn.(MigratableConnection)
-	if !ok {
-		return &MigrationResult{}, nil // Conexión no soporta migraciones (ej: FS)
-	}
-
-	// Obtener executor y ejecutar migraciones
-	executor := migratable.GetMigrationExecutor()
-	result, err := f.migrator.RunWithPgxPool(ctx, executor)
-	if err != nil {
-		return result, err
-	}
-
-	return result, nil
+	// Ejecutar migraciones (detecta MySQL vs PG automáticamente)
+	return runMigrationsOnConn(ctx, f.migrator, dataConn)
 }
 
 // ─── Helpers internos ───
 
 func (f *Factory) resolveTenant(ctx context.Context, slugOrID string) (*repository.Tenant, error) {
-	// 1. Intentar FS (siempre primero — puede estar cacheado localmente)
+	// 1. Intentar FS — UUID first (primary path post-migration), slug as fallback
 	tenants := f.fsConn.Tenants()
 	if tenants != nil {
-		if t, err := tenants.GetBySlug(ctx, slugOrID); err == nil {
+		if t, err := tenants.GetByID(ctx, slugOrID); err == nil {
 			return t, nil
 		}
-		if t, err := tenants.GetByID(ctx, slugOrID); err == nil {
+		if t, err := tenants.GetBySlug(ctx, slugOrID); err == nil {
 			return t, nil
 		}
 	}
@@ -430,10 +423,10 @@ func (f *Factory) resolveTenant(ctx context.Context, slugOrID string) (*reposito
 	if f.globalDBConn != nil {
 		dbTenants := f.globalDBConn.Tenants()
 		if dbTenants != nil {
-			if t, err := dbTenants.GetBySlug(ctx, slugOrID); err == nil {
+			if t, err := dbTenants.GetByID(ctx, slugOrID); err == nil {
 				return t, nil
 			}
-			if t, err := dbTenants.GetByID(ctx, slugOrID); err == nil {
+			if t, err := dbTenants.GetBySlug(ctx, slugOrID); err == nil {
 				return t, nil
 			}
 		}
@@ -522,16 +515,11 @@ func (f *Factory) createTenantConnection(ctx context.Context, slug string, cfg A
 		return nil, fmt.Errorf("factory: connect %s for %s: %w", cfg.Name, slug, err)
 	}
 
-	// Ejecutar migraciones si están configuradas
+	// Ejecutar migraciones si están configuradas (detecta MySQL vs PG automáticamente)
 	if f.migrator != nil {
-		if migratable, ok := conn.(MigratableConnection); ok {
-			executor := migratable.GetMigrationExecutor()
-			if executor != nil {
-				if _, err := f.migrator.RunWithPgxPool(ctx, executor); err != nil {
-					conn.Close()
-					return nil, fmt.Errorf("factory: auto-migrate %s: %w", slug, err)
-				}
-			}
+		if _, err := runMigrationsOnConn(ctx, f.migrator, conn); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("factory: auto-migrate %s: %w", slug, err)
 		}
 	}
 
@@ -544,8 +532,8 @@ func (f *Factory) getCache(ctx context.Context, tenant *repository.Tenant) cache
 		return cache.NewMemory(tenant.Slug + ":")
 	}
 
-	// Cachear por slug para evitar abrir un nuevo pool Redis por request (MED-9)
-	if cached, ok := f.tenantCaches.Load(tenant.Slug); ok {
+	// Cachear por UUID para evitar abrir un nuevo pool Redis por request (MED-9)
+	if cached, ok := f.tenantCaches.Load(tenant.ID); ok {
 		return cached.(cache.Client)
 	}
 
@@ -565,7 +553,7 @@ func (f *Factory) getCache(ctx context.Context, tenant *repository.Tenant) cache
 	}
 
 	// Store only on success; use LoadOrStore to avoid race
-	if actual, loaded := f.tenantCaches.LoadOrStore(tenant.Slug, c); loaded {
+	if actual, loaded := f.tenantCaches.LoadOrStore(tenant.ID, c); loaded {
 		// Another goroutine stored first — close the one we just opened
 		if closer, ok := c.(interface{ Close() error }); ok {
 			_ = closer.Close()
@@ -607,58 +595,60 @@ func (c *factoryConfigAccess) SystemSettings() repository.SystemSettingsReposito
 	return nil
 }
 
-func (c *factoryConfigAccess) Clients(tenantSlug string) repository.ClientRepository {
+func (c *factoryConfigAccess) Clients(tenantID string) repository.ClientRepository {
 	if c.cache != nil {
-		// Modo DB-primary: resolver slug → ID desde primary y delegar al cpClientRepo
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		t, err := c.primary.Tenants().GetBySlug(ctx, tenantSlug)
-		if err == nil {
-			if builder, ok := c.primary.(interface {
-				NewClientRepo(tenantID string) repository.ClientRepository
-			}); ok {
-				return builder.NewClientRepo(t.ID)
-			}
+		// Modo DB-primary: pasar UUID directamente al repo builder
+		if builder, ok := c.primary.(interface {
+			NewClientRepo(tenantID string) repository.ClientRepository
+		}); ok {
+			return builder.NewClientRepo(tenantID)
 		}
-		// Fallback a FS si la resolución slug→ID falló
 	}
-	// Modo FS-only: usar wrapper con tenantSlug pre-bound
+	// Modo FS-only: resolver UUID→slug para rutas del filesystem
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	slug := tenantID // fallback defensivo
+	if t, err := c.primary.Tenants().GetByID(ctx, tenantID); err == nil {
+		slug = t.Slug
+	}
 	raw := mustFSRaw(c.primary)
-	return &tenantScopedClientRepo{delegate: raw.RawClients(), tenantSlug: tenantSlug}
+	return &tenantScopedClientRepo{delegate: raw.RawClients(), tenantSlug: slug}
 }
 
-func (c *factoryConfigAccess) Scopes(tenantSlug string) repository.ScopeRepository {
+func (c *factoryConfigAccess) Scopes(tenantID string) repository.ScopeRepository {
 	if c.cache != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		t, err := c.primary.Tenants().GetBySlug(ctx, tenantSlug)
-		if err == nil {
-			if builder, ok := c.primary.(interface {
-				NewScopeRepo(tenantID string) repository.ScopeRepository
-			}); ok {
-				return builder.NewScopeRepo(t.ID)
-			}
+		if builder, ok := c.primary.(interface {
+			NewScopeRepo(tenantID string) repository.ScopeRepository
+		}); ok {
+			return builder.NewScopeRepo(tenantID)
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	slug := tenantID
+	if t, err := c.primary.Tenants().GetByID(ctx, tenantID); err == nil {
+		slug = t.Slug
+	}
 	raw := mustFSRaw(c.primary)
-	return &tenantScopedScopeRepo{delegate: raw.RawScopes(), tenantSlug: tenantSlug}
+	return &tenantScopedScopeRepo{delegate: raw.RawScopes(), tenantSlug: slug}
 }
 
-func (c *factoryConfigAccess) Claims(tenantSlug string) repository.ClaimRepository {
+func (c *factoryConfigAccess) Claims(tenantID string) repository.ClaimRepository {
 	if c.cache != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		t, err := c.primary.Tenants().GetBySlug(ctx, tenantSlug)
-		if err == nil {
-			if builder, ok := c.primary.(interface {
-				NewClaimsRepo(tenantID string) repository.ClaimRepository
-			}); ok {
-				return builder.NewClaimsRepo(t.ID)
-			}
+		if builder, ok := c.primary.(interface {
+			NewClaimsRepo(tenantID string) repository.ClaimRepository
+		}); ok {
+			return builder.NewClaimsRepo(tenantID)
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	slug := tenantID
+	if t, err := c.primary.Tenants().GetByID(ctx, tenantID); err == nil {
+		slug = t.Slug
+	}
 	raw := mustFSRaw(c.primary)
-	return &tenantScopedClaimRepo{delegate: raw.RawClaims(), tenantSlug: tenantSlug}
+	return &tenantScopedClaimRepo{delegate: raw.RawClaims(), tenantSlug: slug}
 }
 
 func (c *factoryConfigAccess) Keys() repository.KeyRepository {

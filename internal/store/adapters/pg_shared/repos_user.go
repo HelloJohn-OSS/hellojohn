@@ -27,13 +27,26 @@ type sharedUserRepo struct {
 	tenantID uuid.UUID
 }
 
+// sharedUnmarshalCustomData deserializes the custom_data JSONB column into a map.
+// Returns an empty (non-nil) map on NULL or invalid JSON.
+func sharedUnmarshalCustomData(data []byte) map[string]any {
+	result := make(map[string]any)
+	if len(data) == 0 {
+		return result
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return make(map[string]any)
+	}
+	return result
+}
+
 func (r *sharedUserRepo) GetByEmail(ctx context.Context, _ string, email string) (*repository.User, *repository.Identity, error) {
 	// NOTE: tenantID param from interface is IGNORED — we use r.tenantID.
 	const query = `
 		SELECT u.id, u.email, u.email_verified,
 		       COALESCE(u.name,''), COALESCE(u.given_name,''), COALESCE(u.family_name,''),
 		       COALESCE(u.picture,''), COALESCE(u.locale,''), COALESCE(u.language,''),
-		       u.source_client_id, u.created_at, u.metadata,
+		       u.source_client_id, u.created_at, u.metadata, u.custom_data,
 		       u.disabled_at, u.disabled_until, u.disabled_reason,
 		       i.id, i.provider, i.provider_user_id, i.email, i.email_verified, i.password_hash, i.created_at
 		FROM app_user u
@@ -46,6 +59,7 @@ func (r *sharedUserRepo) GetByEmail(ctx context.Context, _ string, email string)
 
 	var user repository.User
 	var metadata []byte
+	var customData []byte
 
 	// Nullable identity fields (NULL when user has no password identity — social-only users)
 	var identityID *string
@@ -61,7 +75,7 @@ func (r *sharedUserRepo) GetByEmail(ctx context.Context, _ string, email string)
 	err := r.pool.QueryRow(ctx, query, r.tenantID, email).Scan(
 		&user.ID, &user.Email, &user.EmailVerified,
 		&user.Name, &user.GivenName, &user.FamilyName, &user.Picture, &user.Locale, &user.Language,
-		&user.SourceClientID, &user.CreatedAt, &metadata,
+		&user.SourceClientID, &user.CreatedAt, &metadata, &customData,
 		&user.DisabledAt, &user.DisabledUntil, &user.DisabledReason,
 		&identityID, &identityProvider, &identityProviderUserID,
 		&identityEmail, &identityEmailVerified, &pwdHash, &identityCreatedAt,
@@ -73,12 +87,12 @@ func (r *sharedUserRepo) GetByEmail(ctx context.Context, _ string, email string)
 		return nil, nil, fmt.Errorf("pg_shared: get user by email: %w", err)
 	}
 
-	// Unmarshal metadata JSONB — mirrors GetByID to avoid silent data loss on login.
 	if len(metadata) > 0 {
 		if err := json.Unmarshal(metadata, &user.Metadata); err != nil {
 			log.Printf("WARN: pg_shared: json.Unmarshal metadata for user %s: %v", user.Email, err)
 		}
 	}
+	user.CustomFields = sharedUnmarshalCustomData(customData)
 
 	// Social-only users have no password identity row — return nil identity
 	if identityID == nil {
@@ -113,18 +127,19 @@ func (r *sharedUserRepo) GetByID(ctx context.Context, userID string) (*repositor
 		SELECT id, email, email_verified,
 		       COALESCE(name,''), COALESCE(given_name,''), COALESCE(family_name,''),
 		       COALESCE(picture,''), COALESCE(locale,''), COALESCE(language,''),
-		       source_client_id, created_at, metadata,
+		       source_client_id, created_at, metadata, custom_data,
 		       disabled_at, disabled_until, disabled_reason
 		FROM app_user
 		WHERE tenant_id = $1 AND id = $2
 	`
 	var user repository.User
 	var metadata []byte
+	var customData []byte
 	user.TenantID = r.tenantID.String()
 	err := r.pool.QueryRow(ctx, query, r.tenantID, userID).Scan(
 		&user.ID, &user.Email, &user.EmailVerified,
 		&user.Name, &user.GivenName, &user.FamilyName, &user.Picture, &user.Locale, &user.Language,
-		&user.SourceClientID, &user.CreatedAt, &metadata,
+		&user.SourceClientID, &user.CreatedAt, &metadata, &customData,
 		&user.DisabledAt, &user.DisabledUntil, &user.DisabledReason,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -138,6 +153,7 @@ func (r *sharedUserRepo) GetByID(ctx context.Context, userID string) (*repositor
 			log.Printf("WARN: pg_shared: json.Unmarshal metadata for user %s: %v", user.ID, err)
 		}
 	}
+	user.CustomFields = sharedUnmarshalCustomData(customData)
 	return &user, nil
 }
 
@@ -147,28 +163,35 @@ func (r *sharedUserRepo) Create(ctx context.Context, input repository.CreateUser
 
 	err := execWithRLS(ctx, r.pool, r.tenantID, func(tx pgx.Tx) error {
 		user = repository.User{
-			TenantID:   r.tenantID.String(),
-			Email:      input.Email,
-			Name:       input.Name,
-			GivenName:  input.GivenName,
-			FamilyName: input.FamilyName,
-			Picture:    input.Picture,
-			Locale:     input.Locale,
-			CreatedAt:  time.Now(),
+			TenantID:     r.tenantID.String(),
+			Email:        input.Email,
+			Name:         input.Name,
+			GivenName:    input.GivenName,
+			FamilyName:   input.FamilyName,
+			Picture:      input.Picture,
+			Locale:       input.Locale,
+			CustomFields: input.CustomFields,
+			CreatedAt:    time.Now(),
 		}
 		if input.SourceClientID != "" {
 			user.SourceClientID = &input.SourceClientID
 		}
 
+		// Ensure custom_data is never nil for JSONB serialization
+		customData := input.CustomFields
+		if customData == nil {
+			customData = make(map[string]any)
+		}
+
 		const insertUser = `
-			INSERT INTO app_user (tenant_id, email, email_verified, name, given_name, family_name, picture, locale, source_client_id, created_at)
-			VALUES ($1, $2, false, $3, $4, $5, $6, $7, $8, $9)
+			INSERT INTO app_user (tenant_id, email, email_verified, name, given_name, family_name, picture, locale, source_client_id, custom_data, created_at)
+			VALUES ($1, $2, false, $3, $4, $5, $6, $7, $8, $9, $10)
 			RETURNING id
 		`
 		err := tx.QueryRow(ctx, insertUser,
 			r.tenantID, user.Email, nullIfEmpty(user.Name), nullIfEmpty(user.GivenName),
 			nullIfEmpty(user.FamilyName), nullIfEmpty(user.Picture), nullIfEmpty(user.Locale),
-			user.SourceClientID, user.CreatedAt,
+			user.SourceClientID, customData, user.CreatedAt,
 		).Scan(&user.ID)
 		if err != nil {
 			return fmt.Errorf("insert user: %w", err)
@@ -210,8 +233,8 @@ func (r *sharedUserRepo) CreateBatch(ctx context.Context, _ string, users []repo
 
 		// Phase 1: batch-insert all app_user rows, collect RETURNING ids.
 		const insertUserSQL = `
-			INSERT INTO app_user (tenant_id, email, email_verified, name, given_name, family_name, picture, locale, source_client_id, created_at)
-			VALUES ($1, $2, false, $3, $4, $5, $6, $7, $8, $9)
+			INSERT INTO app_user (tenant_id, email, email_verified, name, given_name, family_name, picture, locale, source_client_id, custom_data, created_at)
+			VALUES ($1, $2, false, $3, $4, $5, $6, $7, $8, $9, $10)
 			RETURNING id
 		`
 		userBatch := &pgx.Batch{}
@@ -220,10 +243,14 @@ func (r *sharedUserRepo) CreateBatch(ctx context.Context, _ string, users []repo
 			if u.SourceClientID != "" {
 				srcClientID = &u.SourceClientID
 			}
+			customData := u.CustomFields
+			if customData == nil {
+				customData = make(map[string]any)
+			}
 			userBatch.Queue(insertUserSQL,
 				r.tenantID, u.Email, nullIfEmpty(u.Name), nullIfEmpty(u.GivenName),
 				nullIfEmpty(u.FamilyName), nullIfEmpty(u.Picture), nullIfEmpty(u.Locale),
-				srcClientID, now,
+				srcClientID, customData, now,
 			)
 		}
 		br := tx.SendBatch(ctx, userBatch)
@@ -302,10 +329,18 @@ func (r *sharedUserRepo) Update(ctx context.Context, userID string, input reposi
 			argIdx++
 		}
 
+		// Merge custom fields into JSONB column (shallow merge via ||)
+		if len(input.CustomFields) > 0 {
+			setClauses = append(setClauses, fmt.Sprintf("custom_data = COALESCE(custom_data, '{}'::jsonb) || $%d::jsonb", argIdx))
+			args = append(args, input.CustomFields)
+			argIdx++
+		}
+
 		// Always touch updated_at so callers can detect stale caches.
 		setClauses = append(setClauses, "updated_at = NOW()")
 
-		if len(setClauses) == 0 {
+		if len(setClauses) <= 1 {
+			// Only updated_at — nothing meaningful to update
 			return nil
 		}
 
@@ -528,14 +563,14 @@ func (r *sharedUserRepo) List(ctx context.Context, _ string, filter repository.L
 	if filter.Search != "" {
 		query = `SELECT id, email, email_verified, COALESCE(name,''), COALESCE(given_name,''), COALESCE(family_name,''),
 		         COALESCE(picture,''), COALESCE(locale,''), COALESCE(language,''),
-		         source_client_id, created_at, metadata, disabled_at, disabled_until, disabled_reason
+		         source_client_id, created_at, metadata, custom_data, disabled_at, disabled_until, disabled_reason
 		         FROM app_user WHERE tenant_id = $1 AND (email ILIKE $2 OR name ILIKE $2)
 		         ORDER BY created_at DESC LIMIT $3 OFFSET $4`
 		args = []any{r.tenantID, "%" + filter.Search + "%", limit, offset}
 	} else {
 		query = `SELECT id, email, email_verified, COALESCE(name,''), COALESCE(given_name,''), COALESCE(family_name,''),
 		         COALESCE(picture,''), COALESCE(locale,''), COALESCE(language,''),
-		         source_client_id, created_at, metadata, disabled_at, disabled_until, disabled_reason
+		         source_client_id, created_at, metadata, custom_data, disabled_at, disabled_until, disabled_reason
 		         FROM app_user WHERE tenant_id = $1
 		         ORDER BY created_at DESC LIMIT $2 OFFSET $3`
 		args = []any{r.tenantID, limit, offset}
@@ -552,10 +587,11 @@ func (r *sharedUserRepo) List(ctx context.Context, _ string, filter repository.L
 		var u repository.User
 		u.TenantID = r.tenantID.String()
 		var metadata []byte
+		var customData []byte
 		if err := rows.Scan(
 			&u.ID, &u.Email, &u.EmailVerified,
 			&u.Name, &u.GivenName, &u.FamilyName, &u.Picture, &u.Locale, &u.Language,
-			&u.SourceClientID, &u.CreatedAt, &metadata,
+			&u.SourceClientID, &u.CreatedAt, &metadata, &customData,
 			&u.DisabledAt, &u.DisabledUntil, &u.DisabledReason,
 		); err != nil {
 			return nil, fmt.Errorf("pg_shared: scan user: %w", err)
@@ -565,6 +601,7 @@ func (r *sharedUserRepo) List(ctx context.Context, _ string, filter repository.L
 				log.Printf("WARN: pg_shared: json.Unmarshal metadata for user %s: %v", u.ID, err)
 			}
 		}
+		u.CustomFields = sharedUnmarshalCustomData(customData)
 		users = append(users, u)
 	}
 	return users, rows.Err()

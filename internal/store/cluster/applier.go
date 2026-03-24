@@ -19,9 +19,9 @@ type Applier interface {
 // ConfigAccessor provee acceso a repos de control plane.
 type ConfigAccessor interface {
 	Tenants() repository.TenantRepository
-	Clients(tenantSlug string) repository.ClientRepository
-	Scopes(tenantSlug string) repository.ScopeRepository
-	Claims(tenantSlug string) repository.ClaimRepository
+	Clients(tenantID string) repository.ClientRepository
+	Scopes(tenantID string) repository.ScopeRepository
+	Claims(tenantID string) repository.ClaimRepository
 }
 
 // V2Applier implementa Applier usando Store V2.

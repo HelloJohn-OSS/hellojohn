@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS app_user (
   status           TEXT        NOT NULL DEFAULT 'active',
   profile          JSONB       NOT NULL DEFAULT '{}',
   metadata         JSONB       NOT NULL DEFAULT '{}',
+  custom_data      JSONB       NOT NULL DEFAULT '{}'::jsonb,
   disabled_at      TIMESTAMPTZ,
   disabled_reason  TEXT,
   disabled_until   TIMESTAMPTZ,
